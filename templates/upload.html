@@ -1,0 +1,192 @@
+{% extends "base.html" %}
+{% block title %}Upload Reports – ProDough Forecasting{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <h4 class="mb-0 fw-bold">Upload Reports</h4>
+  <a href="{{ url_for('index') }}" class="btn btn-sm btn-outline-secondary">
+    <i class="bi bi-arrow-left me-1"></i> Dashboard
+  </a>
+</div>
+
+<div class="row g-4 mb-4">
+  <!-- ShipHero Upload -->
+  <div class="col-md-4">
+    <div class="card border-0 shadow-sm h-100">
+      <div class="card-header bg-white border-bottom py-3">
+        <div class="d-flex align-items-center gap-2">
+          <div class="upload-icon bg-primary-subtle text-primary"><i class="bi bi-building fs-5"></i></div>
+          <div>
+            <h6 class="mb-0 fw-semibold">ShipHero Inventory</h6>
+            <small class="text-muted">Current on-hand quantities</small>
+          </div>
+        </div>
+      </div>
+      <div class="card-body">
+        <form method="POST" action="{{ url_for('upload') }}" enctype="multipart/form-data">
+          <input type="hidden" name="source" value="shiphero">
+          <div class="mb-3">
+            <label class="form-label small fw-semibold">Export File <span class="text-muted fw-normal">(CSV or XLSX)</span></label>
+            <input type="file" class="form-control form-control-sm" name="file" accept=".csv,.xlsx,.xls" required>
+          </div>
+          <div class="alert alert-light border small py-2 mb-3">
+            <strong>Expected columns:</strong><br>
+            Name, On Hand, Available, SKU, Warehouse
+          </div>
+          <button type="submit" class="btn btn-primary btn-sm w-100">
+            <i class="bi bi-upload me-1"></i> Import Inventory
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Shopify Upload -->
+  <div class="col-md-4">
+    <div class="card border-0 shadow-sm h-100">
+      <div class="card-header bg-white border-bottom py-3">
+        <div class="d-flex align-items-center gap-2">
+          <div class="upload-icon bg-success-subtle text-success"><i class="bi bi-shop fs-5"></i></div>
+          <div>
+            <h6 class="mb-0 fw-semibold">Shopify Sales</h6>
+            <small class="text-muted">Sales by product variant</small>
+          </div>
+        </div>
+      </div>
+      <div class="card-body">
+        <form method="POST" action="{{ url_for('upload') }}" enctype="multipart/form-data">
+          <input type="hidden" name="source" value="shopify">
+          <div class="mb-3">
+            <label class="form-label small fw-semibold">Report Period</label>
+            <select class="form-select form-select-sm" name="period_days">
+              <option value="15">Last 15 days</option>
+              <option value="30" selected>Last 30 days</option>
+              <option value="60">Last 60 days</option>
+              <option value="90">Last 90 days</option>
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label small fw-semibold">Export File <span class="text-muted fw-normal">(CSV or XLSX)</span></label>
+            <input type="file" class="form-control form-control-sm" name="file" accept=".csv,.xlsx,.xls" required>
+          </div>
+          <div class="alert alert-light border small py-2 mb-3">
+            <strong>Expected columns:</strong><br>
+            Product variant SKU, Net items sold
+          </div>
+          <button type="submit" class="btn btn-success btn-sm w-100">
+            <i class="bi bi-upload me-1"></i> Import Shopify Sales
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Amazon Upload -->
+  <div class="col-md-4">
+    <div class="card border-0 shadow-sm h-100">
+      <div class="card-header bg-white border-bottom py-3">
+        <div class="d-flex align-items-center gap-2">
+          <div class="upload-icon bg-warning-subtle text-warning"><i class="bi bi-amazon fs-5"></i></div>
+          <div>
+            <h6 class="mb-0 fw-semibold">Amazon Sales</h6>
+            <small class="text-muted">Business Report (Detail Page)</small>
+          </div>
+        </div>
+      </div>
+      <div class="card-body">
+        <form method="POST" action="{{ url_for('upload') }}" enctype="multipart/form-data">
+          <input type="hidden" name="source" value="amazon">
+          <div class="mb-3">
+            <label class="form-label small fw-semibold">Report Period</label>
+            <select class="form-select form-select-sm" name="period_days">
+              <option value="15">Last 15 days</option>
+              <option value="30" selected>Last 30 days</option>
+              <option value="60">Last 60 days</option>
+              <option value="90">Last 90 days</option>
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label small fw-semibold">Export File <span class="text-muted fw-normal">(CSV or XLSX)</span></label>
+            <input type="file" class="form-control form-control-sm" name="file" accept=".csv,.xlsx,.xls" required>
+          </div>
+          <div class="alert alert-light border small py-2 mb-3">
+            <strong>Expected columns:</strong><br>
+            (Child) ASIN, Units Ordered, Title
+          </div>
+          <button type="submit" class="btn btn-warning btn-sm w-100">
+            <i class="bi bi-upload me-1"></i> Import Amazon Sales
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Import History -->
+<div class="row g-3">
+  <div class="col-md-6">
+    <div class="card border-0 shadow-sm">
+      <div class="card-header bg-white d-flex justify-content-between align-items-center py-3">
+        <h6 class="fw-semibold mb-0">Inventory Import History</h6>
+        <span class="badge bg-secondary-subtle text-secondary border">{{ inv_imports | length }}</span>
+      </div>
+      {% if inv_imports %}
+      <div class="list-group list-group-flush">
+        {% for imp in inv_imports %}
+        <div class="list-group-item d-flex justify-content-between align-items-center py-2 px-3">
+          <div>
+            <div class="small fw-semibold">{{ imp['filename'] or 'Unnamed' }}</div>
+            <div class="tiny text-muted">{{ imp['import_date'][:16].replace('T',' ') }} · {{ imp['row_count'] }} SKUs</div>
+          </div>
+          <form method="POST" action="{{ url_for('delete_import', type='inventory', import_id=imp['id']) }}"
+                onsubmit="return confirm('Delete this import?')">
+            <button type="submit" class="btn btn-sm btn-outline-danger border-0">
+              <i class="bi bi-trash3"></i>
+            </button>
+          </form>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="card-body text-center py-4 text-muted small">No inventory imports yet.</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="col-md-6">
+    <div class="card border-0 shadow-sm">
+      <div class="card-header bg-white d-flex justify-content-between align-items-center py-3">
+        <h6 class="fw-semibold mb-0">Sales Import History</h6>
+        <span class="badge bg-secondary-subtle text-secondary border">{{ sales_imports | length }}</span>
+      </div>
+      {% if sales_imports %}
+      <div class="list-group list-group-flush">
+        {% for imp in sales_imports %}
+        <div class="list-group-item d-flex justify-content-between align-items-center py-2 px-3">
+          <div>
+            <div class="small fw-semibold d-flex align-items-center gap-2">
+              {% if imp['source'] == 'shopify' %}
+                <span class="badge bg-success-subtle text-success border border-success-subtle">Shopify</span>
+              {% else %}
+                <span class="badge bg-warning-subtle text-warning border border-warning-subtle">Amazon</span>
+              {% endif %}
+              {{ imp['period_days'] }}-day · {{ imp['filename'] or 'Unnamed' }}
+            </div>
+            <div class="tiny text-muted">{{ imp['import_date'][:16].replace('T',' ') }} · {{ imp['row_count'] }} SKUs</div>
+          </div>
+          <form method="POST" action="{{ url_for('delete_import', type='sales', import_id=imp['id']) }}"
+                onsubmit="return confirm('Delete this import?')">
+            <button type="submit" class="btn btn-sm btn-outline-danger border-0">
+              <i class="bi bi-trash3"></i>
+            </button>
+          </form>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="card-body text-center py-4 text-muted small">No sales imports yet.</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

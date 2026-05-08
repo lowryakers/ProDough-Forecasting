@@ -1,0 +1,152 @@
+[
+  {
+    "prodough_sku": "PP-AP-01",
+    "merchant_sku": "C9-OMTI-IHRZ",
+    "asin": "B0BZG5GQNK",
+    "fnsku": "B0BZG5GQNK"
+  },
+  {
+    "prodough_sku": "PP-CM-02",
+    "merchant_sku": "YQ-SXQC-VANU",
+    "asin": "B0BZG58X28",
+    "fnsku": "B0BZG58X28"
+  },
+  {
+    "prodough_sku": "PP-CNC-03",
+    "merchant_sku": "JX-Q886-VKLU",
+    "asin": "B0BZGDTKW8",
+    "fnsku": "B0BZGDTKW8"
+  },
+  {
+    "prodough_sku": "PP-CC-04",
+    "merchant_sku": "A5-IP55-IDE6",
+    "asin": "B0BZFZP998",
+    "fnsku": "B0BZFZP998"
+  },
+  {
+    "prodough_sku": "PP-GD-05",
+    "merchant_sku": "Z9-39B6-TPZ6",
+    "asin": "B0BZG3WPVM",
+    "fnsku": "B0BZG3WPVM"
+  },
+  {
+    "prodough_sku": "PP-H-06",
+    "merchant_sku": "70-PB2R-R87Y",
+    "asin": "B0BZG7S9ZM",
+    "fnsku": "B0BZG7S9ZM"
+  },
+  {
+    "prodough_sku": "PP-IM-07",
+    "merchant_sku": "G0-1LIP-0IMS",
+    "asin": "B0BZGB357F",
+    "fnsku": "B0BZGB357F"
+  },
+  {
+    "prodough_sku": "PP-MD-08",
+    "merchant_sku": "UU-SQZV-Z29R",
+    "asin": "B0BZG1F4DQ",
+    "fnsku": "B0BZG1F4DQ"
+  },
+  {
+    "prodough_sku": "PP-N-09",
+    "merchant_sku": "N4-E57A-Z6W0",
+    "asin": "B0BZFTTD8S",
+    "fnsku": "B0BZFTTD8S"
+  },
+  {
+    "prodough_sku": "PP-OC-10",
+    "merchant_sku": "7D-QFQR-0O5Q",
+    "asin": "B0BZGD56SV",
+    "fnsku": "B0BZGD56SV"
+  },
+  {
+    "prodough_sku": "PP-PC-11",
+    "merchant_sku": "0Q-GGKR-6ZGZ",
+    "asin": "B0BZGDLR4V",
+    "fnsku": "B0BZGDLR4V"
+  },
+  {
+    "prodough_sku": "PP-RC-12",
+    "merchant_sku": "E1-JF6D-YU2J",
+    "asin": "B0BZGB8CVV",
+    "fnsku": "B0BZGB8CVV"
+  },
+  {
+    "prodough_sku": "PP-SD-13",
+    "merchant_sku": "0A-K09D-76UC",
+    "asin": "B0BZG3FY5C",
+    "fnsku": "B0BZG3FY5C"
+  },
+  {
+    "prodough_sku": "PP-SS-14",
+    "merchant_sku": "4E-K8PC-81OV",
+    "asin": "B0BZG8B99C",
+    "fnsku": "B0BZG8B99C"
+  },
+  {
+    "prodough_sku": "PCCM-CH-01",
+    "merchant_sku": "P4-F0FU-A208",
+    "asin": "B0C67ST3GW",
+    "fnsku": "B0C67ST3GW"
+  },
+  {
+    "prodough_sku": "PCCM-CS-02",
+    "merchant_sku": "4A-N614-UYY2",
+    "asin": "B0C67HH5MN",
+    "fnsku": "B0C67HH5MN"
+  },
+  {
+    "prodough_sku": "PCCM-PS-03",
+    "merchant_sku": "SL-N2NI-RQUK",
+    "asin": "B0C67RRFZP",
+    "fnsku": "B0C67RRFZP"
+  },
+  {
+    "prodough_sku": "PCCM-V-04",
+    "merchant_sku": "7U-N1Z7-6CG0",
+    "asin": "B0C67CYJGD",
+    "fnsku": "B0C67CYJGD"
+  },
+  {
+    "prodough_sku": "PCM-CH",
+    "merchant_sku": "WB-2NS6-JVOF",
+    "asin": "B0C5483MGH",
+    "fnsku": "B0C5483MGH"
+  },
+  {
+    "prodough_sku": "PCM-OR",
+    "merchant_sku": "TG-HA95-E9R7",
+    "asin": "B0C545D5TM",
+    "fnsku": "B0C545D5TM"
+  },
+  {
+    "prodough_sku": "PPM-PS",
+    "merchant_sku": "PNCK-PS",
+    "asin": "B0C3WLWC86",
+    "fnsku": "B0C3WLWC86"
+  },
+  {
+    "prodough_sku": "PPM-BM",
+    "merchant_sku": "PNCK-OG",
+    "asin": "B09QRM27C9",
+    "fnsku": "B09QRM27C9"
+  },
+  {
+    "prodough_sku": "PPM-CS",
+    "merchant_sku": "PNCK-CNNSW",
+    "asin": "B0C3WNMR8Y",
+    "fnsku": "B0C3WNMR8Y"
+  },
+  {
+    "prodough_sku": "PPM-C",
+    "merchant_sku": "PNCK-CH",
+    "asin": "B0C3WHH9YF",
+    "fnsku": "B0C3WHH9YF"
+  },
+  {
+    "prodough_sku": "GFFB-01",
+    "merchant_sku": "850030869753",
+    "asin": "B09QRCYDP5",
+    "fnsku": "X00350ZHP1"
+  }
+]

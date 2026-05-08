@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+{% block title %}PO Forecast – ProDough Forecasting{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <h4 class="mb-0 fw-bold">Generate PO Forecast</h4>
+</div>
+
+<div class="row g-4">
+  <div class="col-lg-8">
+    <div class="card border-0 shadow-sm">
+      <div class="card-header bg-white py-3">
+        <h6 class="fw-semibold mb-0">Select Data Sources</h6>
+      </div>
+      <div class="card-body">
+        <form method="POST" action="{{ url_for('forecast') }}">
+          <div class="row g-3 mb-4">
+            <!-- Inventory -->
+            <div class="col-12">
+              <label class="form-label small fw-semibold">
+                <i class="bi bi-building text-primary me-1"></i> ShipHero Inventory Import
+              </label>
+              {% if inv_imports %}
+              <select class="form-select form-select-sm" name="inventory_import_id">
+                <option value="">— None / Skip —</option>
+                {% for imp in inv_imports %}
+                <option value="{{ imp['id'] }}"
+                  {% if latest_inv and imp['id'] == latest_inv['id'] %}selected{% endif %}>
+                  {{ imp['import_date'][:10] }} · {{ imp['filename'] or 'Import #' ~ imp['id'] }} · {{ imp['row_count'] }} SKUs
+                </option>
+                {% endfor %}
+              </select>
+              {% else %}
+              <div class="alert alert-warning py-2 mb-0 small">
+                No inventory imports found. <a href="{{ url_for('upload') }}">Upload ShipHero export</a> first.
+              </div>
+              {% endif %}
+            </div>
+
+            <!-- Shopify -->
+            <div class="col-md-6">
+              <label class="form-label small fw-semibold">
+                <i class="bi bi-shop text-success me-1"></i> Shopify Sales Import
+              </label>
+              {% if shopify_imports %}
+              <select class="form-select form-select-sm" name="shopify_import_id">
+                <option value="">— None / Skip —</option>
+                {% for imp in shopify_imports %}
+                <option value="{{ imp['id'] }}"
+                  {% if latest_shopify and imp['id'] == latest_shopify['id'] %}selected{% endif %}>
+                  {{ imp['import_date'][:10] }} · {{ imp['period_days'] }}d · {{ imp['row_count'] }} SKUs
+                </option>
+                {% endfor %}
+              </select>
+              {% else %}
+              <div class="alert alert-secondary py-2 mb-0 small">No Shopify imports yet.</div>
+              {% endif %}
+            </div>
+
+            <!-- Amazon -->
+            <div class="col-md-6">
+              <label class="form-label small fw-semibold">
+                <i class="bi bi-amazon text-warning me-1"></i> Amazon Sales Import
+              </label>
+              {% if amazon_imports %}
+              <select class="form-select form-select-sm" name="amazon_import_id">
+                <option value="">— None / Skip —</option>
+                {% for imp in amazon_imports %}
+                <option value="{{ imp['id'] }}"
+                  {% if latest_amazon and imp['id'] == latest_amazon['id'] %}selected{% endif %}>
+                  {{ imp['import_date'][:10] }} · {{ imp['period_days'] }}d · {{ imp['row_count'] }} SKUs
+                </option>
+                {% endfor %}
+              </select>
+              {% else %}
+              <div class="alert alert-secondary py-2 mb-0 small">No Amazon imports yet.</div>
+              {% endif %}
+            </div>
+
+            <!-- PO Details -->
+            <div class="col-md-6">
+              <label class="form-label small fw-semibold">PO Number <span class="text-muted fw-normal">(optional)</span></label>
+              <input type="text" class="form-control form-control-sm" name="po_number" placeholder="e.g. RL4827">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label small fw-semibold">Notes <span class="text-muted fw-normal">(optional)</span></label>
+              <input type="text" class="form-control form-control-sm" name="notes" placeholder="Any notes for this PO…">
+            </div>
+          </div>
+
+          <button type="submit" class="btn btn-primary">
+            <i class="bi bi-clipboard2-plus me-1"></i> Generate Forecast
+          </button>
+          <a href="{{ url_for('upload') }}" class="btn btn-outline-secondary ms-2">
+            <i class="bi bi-cloud-upload me-1"></i> Upload More Reports
+          </a>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-4">
+    <!-- Forecast Settings -->
+    <div class="card border-0 shadow-sm mb-3">
+      <div class="card-header bg-white py-3">
+        <h6 class="fw-semibold mb-0">Forecast Settings</h6>
+      </div>
+      <div class="card-body">
+        <div class="mb-3">
+          <div class="d-flex justify-content-between">
+            <span class="small text-muted">Target Inventory Days</span>
+            <strong>{{ target_days }} days</strong>
+          </div>
+          <div class="progress mt-1" style="height:4px">
+            <div class="progress-bar bg-primary" style="width:100%"></div>
+          </div>
+        </div>
+        <hr class="my-2">
+        <div class="small mb-2 fw-semibold text-muted">Reorder Points by Tier</div>
+        {% for tier, days in tier_reorder.items() %}
+        <div class="d-flex justify-content-between align-items-center py-1">
+          <div class="d-flex align-items-center gap-2">
+            <span class="badge tier-badge-{{ tier }}">Tier {{ tier }}</span>
+            <span class="small">{{ 'High velocity' if tier == 1 else ('Medium' if tier == 2 else 'Low velocity') }}</span>
+          </div>
+          <strong class="small">{{ days }} days</strong>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <!-- MOQ Reference -->
+    <div class="card border-0 shadow-sm mb-3">
+      <div class="card-header bg-white py-3">
+        <h6 class="fw-semibold mb-0">MOQ Reference</h6>
+        <small class="text-muted">Per super sack (400 KG)</small>
+      </div>
+      <div class="card-body py-2">
+        {% set moqs = [
+          ('Protein Pouches (PP)', 500, '~800g each'),
+          ('Stick Packs (PSP)', 11500, '~35g each'),
+          ('Donuts (PDM)', 5000, '~80g each'),
+          ('Oatmeal Cups (POC)', 10000, '~40g each'),
+          ('Pancake/Crepe/Cupcake', 1200, '~333g each'),
+        ] %}
+        {% for name, moq, note in moqs %}
+        <div class="d-flex justify-content-between py-1 border-bottom">
+          <div>
+            <div class="small">{{ name }}</div>
+            <div class="tiny text-muted">{{ note }}</div>
+          </div>
+          <strong class="small">{{ "{:,}".format(moq) }}</strong>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

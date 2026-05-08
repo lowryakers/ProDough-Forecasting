@@ -1,0 +1,180 @@
+{% extends "base.html" %}
+{% block title %}Super Sack Calculator – ProDough Forecasting{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <h4 class="mb-0 fw-bold">Super Sack Calculator</h4>
+  <small class="text-muted">1 super sack = {{ super_sack_kg }} KG = 400,000g</small>
+</div>
+
+<div class="row g-4">
+  <!-- Main Calculator -->
+  <div class="col-lg-6">
+    <div class="card border-0 shadow-sm">
+      <div class="card-header bg-white py-3">
+        <h6 class="fw-semibold mb-0">Units → Super Sacks</h6>
+      </div>
+      <div class="card-body">
+        <div class="mb-3">
+          <label class="form-label small fw-semibold">Product Type</label>
+          <select class="form-select" id="calc-prefix">
+            <option value="PP">Protein Pouches (~800g each)</option>
+            <option value="PSP">Stick Packs (~35g each)</option>
+            <option value="PDM">Donut Mix (~80g each)</option>
+            <option value="POC">Oatmeal Cups (~40g each)</option>
+            <option value="PPM">Pancake Mix (~333g each)</option>
+            <option value="PCM">Crepe Mix (~333g each)</option>
+            <option value="PCCM">Cupcake Mix (~333g each)</option>
+          </select>
+        </div>
+        <div class="mb-3">
+          <label class="form-label small fw-semibold">Units Needed</label>
+          <input type="number" class="form-control" id="calc-units" placeholder="Enter unit demand…" min="0">
+        </div>
+        <button class="btn btn-primary w-100" id="calc-btn">
+          <i class="bi bi-calculator me-1"></i> Calculate
+        </button>
+
+        <div id="calc-result" class="mt-4" style="display:none">
+          <hr>
+          <div class="row g-3 mb-3">
+            <div class="col-6">
+              <div class="card bg-primary-subtle border-0">
+                <div class="card-body py-3 text-center">
+                  <div class="text-muted small">Final Units (to MOQ)</div>
+                  <div class="fw-bold fs-3" id="res-units">—</div>
+                  <div class="tiny text-muted" id="res-moq-info">—</div>
+                </div>
+              </div>
+            </div>
+            <div class="col-6">
+              <div class="card bg-warning-subtle border-0">
+                <div class="card-body py-3 text-center">
+                  <div class="text-muted small">Super Sacks</div>
+                  <div class="fw-bold fs-3" id="res-ss">—</div>
+                  <div class="tiny text-muted">× 400 KG each</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Mix Option for PP/PSP -->
+          <div id="mix-option-section" style="display:none">
+            <div class="alert alert-info border-0">
+              <div class="fw-semibold small mb-2"><i class="bi bi-shuffle me-1"></i> Mix Option Available</div>
+              <p class="small mb-2">Instead of rounding up to <strong id="mix-full-pouches">—</strong> pouches, you could use:</p>
+              <div class="row g-2">
+                <div class="col-6 text-center">
+                  <div class="bg-white rounded p-2">
+                    <div class="fw-bold" id="mix-pouches">—</div>
+                    <div class="tiny text-muted">Pouches</div>
+                  </div>
+                </div>
+                <div class="col-6 text-center">
+                  <div class="bg-white rounded p-2">
+                    <div class="fw-bold" id="mix-sticks">—</div>
+                    <div class="tiny text-muted">Stick Packs</div>
+                  </div>
+                </div>
+              </div>
+              <div class="tiny text-muted mt-2">This fills the same super sack with both product types.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Reference Table -->
+  <div class="col-lg-6">
+    <div class="card border-0 shadow-sm mb-3">
+      <div class="card-header bg-white py-3">
+        <h6 class="fw-semibold mb-0">MOQ & Super Sack Reference</h6>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-sm align-middle mb-0">
+          <thead class="table-light">
+            <tr>
+              <th class="ps-3">Product Type</th>
+              <th class="text-end">MOQ</th>
+              <th class="text-end">Weight/Unit</th>
+              <th class="text-end pe-3">Units/Sack</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% set types = [
+              ('Protein Pouches', 'PP', 500, 800),
+              ('Stick Packs', 'PSP', 11500, 35),
+              ('Donuts', 'PDM', 5000, 80),
+              ('Oatmeal Cups', 'POC', 10000, 40),
+              ('Pancake/Crepe/Cupcake', 'PPM', 1200, 333),
+            ] %}
+            {% for name, prefix, moq, weight in types %}
+            <tr>
+              <td class="ps-3 small">{{ name }}</td>
+              <td class="text-end small">{{ "{:,}".format(moq) }}</td>
+              <td class="text-end small">{{ weight }}g</td>
+              <td class="text-end pe-3 small fw-semibold">{{ "{:,}".format((400000 // weight)) }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Explanation -->
+    <div class="card border-0 shadow-sm">
+      <div class="card-header bg-white py-3">
+        <h6 class="fw-semibold mb-0">Flex Ordering Logic</h6>
+      </div>
+      <div class="card-body small text-muted">
+        <p>When demand falls <em>between</em> multiples of an MOQ, you have two options:</p>
+        <ol class="mb-2">
+          <li><strong>Round up</strong> to the next full MOQ multiple</li>
+          <li><strong>Mix products</strong> using the remaining super sack capacity<br>
+              <em>e.g. 700 pouches needed → order 500 pouches + ~6,857 stick packs to fill the remainder of the sack</em></li>
+        </ol>
+        <p class="mb-0">The calculator above shows both options when applicable.</p>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.getElementById('calc-btn').addEventListener('click', function() {
+  const prefix = document.getElementById('calc-prefix').value;
+  const units = parseFloat(document.getElementById('calc-units').value);
+  if (!units || units <= 0) { alert('Enter a valid number of units.'); return; }
+
+  fetch('/api/calculator', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({units_needed: units, prefix})
+  })
+  .then(r => r.json())
+  .then(data => {
+    document.getElementById('res-units').textContent = data.final_units.toLocaleString();
+    document.getElementById('res-moq-info').textContent = `${data.moq_multiples} × ${data.moq.toLocaleString()} MOQ`;
+    document.getElementById('res-ss').textContent = data.super_sacks.toFixed(3);
+    document.getElementById('calc-result').style.display = 'block';
+
+    const mixSection = document.getElementById('mix-option-section');
+    if (data.mix_option) {
+      document.getElementById('mix-full-pouches').textContent = data.final_units.toLocaleString();
+      document.getElementById('mix-pouches').textContent = data.mix_option.pouches.toLocaleString();
+      document.getElementById('mix-sticks').textContent = data.mix_option.stick_packs.toLocaleString();
+      mixSection.style.display = 'block';
+    } else {
+      mixSection.style.display = 'none';
+    }
+  })
+  .catch(() => alert('Calculation error. Please try again.'));
+});
+
+document.getElementById('calc-units').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') document.getElementById('calc-btn').click();
+});
+</script>
+{% endblock %}

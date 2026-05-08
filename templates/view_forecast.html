@@ -1,0 +1,308 @@
+{% extends "base.html" %}
+{% block title %}Forecast #{{ session['id'] }} – ProDough Forecasting{% endblock %}
+
+{% block content %}
+<!-- Header -->
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <h4 class="mb-0 fw-bold">
+      PO Forecast
+      {% if session['po_number'] %}
+        <span class="text-muted">· {{ session['po_number'] }}</span>
+      {% else %}
+        <span class="text-muted">#{{ session['id'] }}</span>
+      {% endif %}
+    </h4>
+    <small class="text-muted">Generated {{ session['created_date'][:16].replace('T', ' ') }}</small>
+  </div>
+  <div class="d-flex gap-2">
+    <button class="btn btn-sm btn-outline-secondary" onclick="window.print()">
+      <i class="bi bi-printer me-1"></i> Print
+    </button>
+    <button class="btn btn-sm btn-outline-secondary" id="export-csv-btn">
+      <i class="bi bi-download me-1"></i> Export CSV
+    </button>
+    <a href="{{ url_for('forecast') }}" class="btn btn-sm btn-primary">
+      <i class="bi bi-plus me-1"></i> New Forecast
+    </a>
+  </div>
+</div>
+
+<!-- Summary Cards -->
+<div class="row g-3 mb-4">
+  <div class="col-sm-6 col-xl-3">
+    <div class="card border-0 shadow-sm">
+      <div class="card-body d-flex align-items-center gap-3 py-3">
+        <div class="stat-icon bg-primary-subtle text-primary"><i class="bi bi-cart-plus fs-4"></i></div>
+        <div>
+          <div class="tiny text-muted">SKUs to Order</div>
+          <div class="fw-bold fs-4">{{ needs_order | length }}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="col-sm-6 col-xl-3">
+    <div class="card border-0 shadow-sm">
+      <div class="card-body d-flex align-items-center gap-3 py-3">
+        <div class="stat-icon bg-success-subtle text-success"><i class="bi bi-boxes fs-4"></i></div>
+        <div>
+          <div class="tiny text-muted">Total Units to Order</div>
+          <div class="fw-bold fs-4" id="total-units">{{ "{:,}".format(total_units) }}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="col-sm-6 col-xl-3">
+    <div class="card border-0 shadow-sm">
+      <div class="card-body d-flex align-items-center gap-3 py-3">
+        <div class="stat-icon bg-warning-subtle text-warning"><i class="bi bi-bag-fill fs-4"></i></div>
+        <div>
+          <div class="tiny text-muted">Total Super Sacks</div>
+          <div class="fw-bold fs-4" id="total-supersacks">{{ total_super_sacks }}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="col-sm-6 col-xl-3">
+    <div class="card border-0 shadow-sm">
+      <div class="card-body d-flex align-items-center gap-3 py-3">
+        <div class="stat-icon bg-info-subtle text-info"><i class="bi bi-clock-history fs-4"></i></div>
+        <div>
+          <div class="tiny text-muted">Target Inventory</div>
+          <div class="fw-bold fs-4">240 days</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Filter Controls -->
+<div class="card border-0 shadow-sm mb-3">
+  <div class="card-body py-2">
+    <div class="row g-2 align-items-center">
+      <div class="col-md-3">
+        <input type="text" id="fc-search" class="form-control form-control-sm" placeholder="Search SKU or product…">
+      </div>
+      <div class="col-md-2">
+        <select id="fc-category" class="form-select form-select-sm">
+          <option value="">All Categories</option>
+          {% for cat in by_category.keys() | sort %}
+          <option value="{{ cat }}">{{ cat }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2">
+        <select id="fc-reorder" class="form-select form-select-sm">
+          <option value="">All SKUs</option>
+          <option value="order">Needs Order Only</option>
+          <option value="critical">Critical (&lt;30d)</option>
+        </select>
+      </div>
+      <div class="col-md-auto ms-auto">
+        <div class="form-check form-switch mb-0">
+          <input class="form-check-input" type="checkbox" id="show-all-toggle">
+          <label class="form-check-label small" for="show-all-toggle">Show all SKUs</label>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Forecast Table -->
+{% for category, cat_items in by_category.items() %}
+{% set cat_order = cat_items | selectattr('final_qty', 'gt', 0) | list | length %}
+<div class="card border-0 shadow-sm mb-3 category-section" data-category="{{ category }}">
+  <div class="card-header bg-white d-flex align-items-center justify-content-between py-2 px-3">
+    <div class="d-flex align-items-center gap-2">
+      <span class="badge category-badge cat-{{ category | lower | replace(' ', '-') }}">{{ category }}</span>
+      <span class="small text-muted">{{ cat_items | length }} SKUs</span>
+    </div>
+    <div class="small text-muted">
+      {% if cat_order > 0 %}
+        <span class="fw-semibold text-danger">{{ cat_order }} to order</span>
+        · {{ "{:,}".format(cat_items | selectattr('final_qty') | sum(attribute='final_qty')) }} units
+        · {{ (cat_items | selectattr('super_sacks') | sum(attribute='super_sacks')) | round(2) }} super sacks
+      {% else %}
+        <span class="text-success"><i class="bi bi-check-circle me-1"></i>No orders needed</span>
+      {% endif %}
+    </div>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-sm table-hover align-middle mb-0 fc-table">
+      <thead class="table-light">
+        <tr>
+          <th class="ps-3" style="width:120px">SKU</th>
+          <th>Product</th>
+          <th class="text-center" style="width:60px">Tier</th>
+          <th class="text-end" style="width:90px">On Hand</th>
+          <th class="text-end" style="width:80px">Avg/Day</th>
+          <th class="text-end" style="width:80px">Days Left</th>
+          <th class="text-end" style="width:90px">Reorder At</th>
+          <th class="text-end" style="width:100px">Suggested</th>
+          <th class="text-end pe-3" style="width:120px">Final Qty</th>
+          <th class="text-end" style="width:90px">Super Sacks</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for it in cat_items | sort(attribute='days_of_demand') %}
+        {% set days = it['days_of_demand'] %}
+        {% set row_class = '' %}
+        {% if it['final_qty'] and it['final_qty'] > 0 %}
+          {% if days and days < 30 %}{% set row_class = 'table-danger' %}
+          {% elif days and days < it['reorder_point'] %}{% set row_class = 'table-warning' %}
+          {% else %}{% set row_class = 'table-info' %}{% endif %}
+        {% endif %}
+        <tr class="fc-row {{ row_class }}"
+            data-sku="{{ it['sku'] }}"
+            data-name="{{ it['product_name'] | lower }}"
+            data-category="{{ category }}"
+            data-order="{{ 'yes' if it['final_qty'] and it['final_qty'] > 0 else 'no' }}"
+            data-days="{{ days or 9999 }}"
+            style="{{ 'display:none' if not (it['final_qty'] and it['final_qty'] > 0) else '' }}">
+          <td class="ps-3 font-monospace small">{{ it['sku'] }}</td>
+          <td class="small">{{ it['product_name'] }}</td>
+          <td class="text-center">
+            <span class="badge tier-badge-{{ it['tier'] }}">T{{ it['tier'] }}</span>
+          </td>
+          <td class="text-end small">{{ "{:,}".format(it['current_inventory']) }}</td>
+          <td class="text-end small">
+            {% if it['avg_daily_demand'] > 0 %}{{ it['avg_daily_demand'] | round(1) }}{% else %}—{% endif %}
+          </td>
+          <td class="text-end small fw-semibold">
+            {% if days is not none %}
+              {% if days >= 9999 %}∞{% else %}{{ days | round | int }}{% endif %}
+            {% else %}—{% endif %}
+          </td>
+          <td class="text-end small text-muted">{{ it['reorder_point'] }}d</td>
+          <td class="text-end small text-muted">{{ "{:,}".format(it['suggested_qty']) if it['suggested_qty'] else '—' }}</td>
+          <td class="text-end pe-3">
+            <input type="number" class="form-control form-control-sm text-end final-qty-input"
+                   data-sku="{{ it['sku'] }}"
+                   data-forecast-id="{{ session['id'] }}"
+                   value="{{ it['final_qty'] or 0 }}"
+                   min="0" step="{{ it['moq'] }}"
+                   style="width:100px">
+          </td>
+          <td class="text-end small supersack-cell" id="ss-{{ it['sku'] | replace('-', '_') }}">
+            {{ it['super_sacks'] | round(3) if it['super_sacks'] else '—' }}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endfor %}
+
+<!-- Previous Forecasts -->
+{% if forecasts | length > 1 %}
+<div class="card border-0 shadow-sm mt-4">
+  <div class="card-header bg-white py-2">
+    <h6 class="fw-semibold mb-0 small">Other Forecasts</h6>
+  </div>
+  <div class="card-body py-2">
+    <div class="d-flex flex-wrap gap-2">
+      {% for f in forecasts %}
+      {% if f['id'] != session['id'] %}
+      <a href="{{ url_for('view_forecast', forecast_id=f['id']) }}" class="btn btn-sm btn-outline-secondary">
+        {{ f['po_number'] or 'Forecast #' ~ f['id'] }} · {{ f['created_date'][:10] }}
+      </a>
+      {% endif %}
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+const forecastId = {{ session['id'] }};
+let debounceTimer;
+
+// Live edit final quantities
+document.querySelectorAll('.final-qty-input').forEach(input => {
+  input.addEventListener('change', function() {
+    const sku = this.dataset.sku;
+    const qty = parseInt(this.value) || 0;
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+      fetch(`/forecast/${forecastId}/update`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({sku, final_qty: qty})
+      })
+      .then(r => r.json())
+      .then(data => {
+        if (data.error) return;
+        // Update super sacks cell
+        const ssCell = document.getElementById('ss-' + sku.replace(/-/g, '_'));
+        if (ssCell) ssCell.textContent = data.super_sacks > 0 ? data.super_sacks.toFixed(3) : '—';
+        // Update totals
+        document.getElementById('total-units').textContent = data.total_units.toLocaleString();
+        document.getElementById('total-supersacks').textContent = data.total_super_sacks;
+      });
+    }, 400);
+  });
+});
+
+// Filtering
+const search = document.getElementById('fc-search');
+const catFilter = document.getElementById('fc-category');
+const reorderFilter = document.getElementById('fc-reorder');
+const showAll = document.getElementById('show-all-toggle');
+
+function applyFilters() {
+  const q = search.value.toLowerCase();
+  const cat = catFilter.value;
+  const reorder = reorderFilter.value;
+  const all = showAll.checked;
+
+  document.querySelectorAll('.fc-row').forEach(r => {
+    const matchQ = !q || r.dataset.sku.toLowerCase().includes(q) || r.dataset.name.includes(q);
+    const matchCat = !cat || r.dataset.category === cat;
+    const matchReorder = !reorder ||
+      (reorder === 'order' && r.dataset.order === 'yes') ||
+      (reorder === 'critical' && parseFloat(r.dataset.days) < 30);
+    const matchAll = all || r.dataset.order === 'yes';
+    r.style.display = matchQ && matchCat && matchReorder && matchAll ? '' : 'none';
+  });
+
+  // Hide category sections with no visible rows
+  document.querySelectorAll('.category-section').forEach(sec => {
+    const visibleRows = sec.querySelectorAll('.fc-row:not([style*="display: none"]):not([style*="display:none"])');
+    sec.style.display = visibleRows.length > 0 ? '' : 'none';
+  });
+}
+
+[search, catFilter, reorderFilter].forEach(el => el.addEventListener('input', applyFilters));
+showAll.addEventListener('change', applyFilters);
+
+// CSV Export
+document.getElementById('export-csv-btn').addEventListener('click', () => {
+  const rows = [['SKU', 'Product Name', 'Category', 'On Hand', 'Avg Daily Demand', 'Days of Demand', 'Reorder Point', 'Suggested Qty', 'Final Qty', 'Super Sacks']];
+  document.querySelectorAll('.fc-row').forEach(r => {
+    const cells = r.querySelectorAll('td');
+    const qty = r.querySelector('.final-qty-input').value;
+    const ss = r.querySelector('[id^="ss-"]');
+    rows.push([
+      cells[0].textContent.trim(),
+      cells[1].textContent.trim(),
+      r.dataset.category,
+      cells[3].textContent.trim(),
+      cells[4].textContent.trim(),
+      cells[5].textContent.trim(),
+      cells[6].textContent.trim(),
+      cells[7].textContent.trim(),
+      qty,
+      ss ? ss.textContent.trim() : '',
+    ]);
+  });
+  const csv = rows.map(r => r.map(v => '"' + String(v).replace(/"/g, '""') + '"').join(',')).join('\n');
+  const a = document.createElement('a');
+  a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
+  a.download = `forecast-${forecastId}.csv`;
+  a.click();
+});
+</script>
+{% endblock %}
