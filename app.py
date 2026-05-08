@@ -122,6 +122,18 @@ def init_db():
             super_sacks REAL DEFAULT 0,
             FOREIGN KEY (forecast_id) REFERENCES forecast_session(id) ON DELETE CASCADE
         );
+        CREATE TABLE IF NOT EXISTS api_credentials (
+            service TEXT PRIMARY KEY,
+            credentials TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE TABLE IF NOT EXISTS sync_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sync_date TEXT NOT NULL,
+            service TEXT NOT NULL,
+            status TEXT NOT NULL,
+            message TEXT,
+            records_synced INTEGER DEFAULT 0
+        );
     ''')
     # Migrate: add source column if missing (for existing databases)
     try:
@@ -990,6 +1002,327 @@ def api_demand_summary():
     } for r in rows]
 
     return jsonify({'rows': summary})
+
+
+# ── API Credentials helpers ───────────────────────────────────────────────────
+
+def get_creds(service: str) -> dict:
+    db = get_db()
+    row = db.execute('SELECT credentials FROM api_credentials WHERE service=?', (service,)).fetchone()
+    if row:
+        return json.loads(row['credentials'])
+    return {}
+
+
+def save_creds(service: str, creds: dict):
+    db = get_db()
+    db.execute('INSERT OR REPLACE INTO api_credentials (service, credentials) VALUES (?,?)',
+               (service, json.dumps(creds)))
+    db.commit()
+
+
+def log_sync(service: str, status: str, message: str, records: int = 0):
+    db = get_db()
+    db.execute('INSERT INTO sync_log (sync_date, service, status, message, records_synced) VALUES (?,?,?,?,?)',
+               (datetime.now().isoformat(), service, status, message, records))
+    db.commit()
+
+
+# ── Settings route ────────────────────────────────────────────────────────────
+
+@app.route('/settings', methods=['GET', 'POST'])
+def settings():
+    if request.method == 'POST':
+        service = request.form.get('service')
+        if service == 'shiphero':
+            save_creds('shiphero', {'token': request.form.get('token', '').strip()})
+            flash('ShipHero credentials saved.', 'success')
+        elif service == 'shopify':
+            save_creds('shopify', {
+                'store': request.form.get('store', '').strip(),
+                'token': request.form.get('token', '').strip(),
+            })
+            flash('Shopify credentials saved.', 'success')
+        elif service == 'amazon':
+            save_creds('amazon', {
+                'lwa_app_id': request.form.get('lwa_app_id', '').strip(),
+                'lwa_client_secret': request.form.get('lwa_client_secret', '').strip(),
+                'refresh_token': request.form.get('refresh_token', '').strip(),
+                'marketplace_id': request.form.get('marketplace_id', 'ATVPDKIKX0DER').strip(),
+                'seller_id': request.form.get('seller_id', '').strip(),
+            })
+            flash('Amazon credentials saved.', 'success')
+        return redirect(url_for('settings'))
+
+    sh_creds = get_creds('shiphero')
+    sp_creds = get_creds('shopify')
+    az_creds = get_creds('amazon')
+    db = get_db()
+    sync_logs = db.execute('SELECT * FROM sync_log ORDER BY sync_date DESC LIMIT 20').fetchall()
+
+    return render_template('settings.html',
+        sh_creds=sh_creds, sp_creds=sp_creds, az_creds=az_creds,
+        sync_logs=sync_logs)
+
+
+@app.route('/settings/test/<service>')
+def test_connection(service):
+    if service == 'shiphero':
+        from integrations.shiphero import test_connection as tc
+        creds = get_creds('shiphero')
+        if not creds.get('token'):
+            return jsonify({'ok': False, 'message': 'No token configured'})
+        result = tc(creds['token'])
+    elif service == 'shopify':
+        from integrations.shopify_api import test_connection as tc
+        creds = get_creds('shopify')
+        if not creds.get('store') or not creds.get('token'):
+            return jsonify({'ok': False, 'message': 'Store URL and token required'})
+        result = tc(creds['store'], creds['token'])
+    elif service == 'amazon':
+        from integrations.amazon_sp import test_connection as tc
+        creds = get_creds('amazon')
+        if not creds.get('refresh_token'):
+            return jsonify({'ok': False, 'message': 'No credentials configured'})
+        result = tc(creds)
+    else:
+        return jsonify({'ok': False, 'message': 'Unknown service'})
+    return jsonify(result)
+
+
+# ── Sync routes ───────────────────────────────────────────────────────────────
+
+@app.route('/sync/shiphero', methods=['POST'])
+def sync_shiphero():
+    from integrations.shiphero import fetch_inventory
+    from app import parse_shiphero  # reuse SKU mapping logic
+    creds = get_creds('shiphero')
+    if not creds.get('token'):
+        return jsonify({'ok': False, 'message': 'ShipHero token not configured. Go to Settings.'})
+    try:
+        raw_items = fetch_inventory(creds['token'])
+    except Exception as e:
+        log_sync('shiphero', 'error', str(e))
+        return jsonify({'ok': False, 'message': str(e)})
+
+    # Map ShipHero SKUs to ProDough SKUs
+    merchant_to_prodough, _, _ = load_mappings()
+    skus_by_sku = {s['sku']: s for s in load_skus()}
+    seen = {}
+    for it in raw_items:
+        raw_sku = it['sku']
+        prodough_sku = merchant_to_prodough.get(raw_sku, raw_sku)
+        if prodough_sku not in skus_by_sku:
+            match = next((k for k in skus_by_sku if k.upper() == prodough_sku.upper()), None)
+            if not match:
+                continue
+            prodough_sku = match
+        if prodough_sku in seen:
+            seen[prodough_sku]['on_hand'] += it['on_hand']
+            seen[prodough_sku]['available'] += it['available']
+        else:
+            seen[prodough_sku] = {
+                'sku': prodough_sku,
+                'product_name': skus_by_sku[prodough_sku]['display_name'] or it['product_name'],
+                'on_hand': it['on_hand'],
+                'available': it['available'],
+                'warehouse': it.get('warehouse', ''),
+            }
+
+    items = list(seen.values())
+    db = get_db()
+    imp = db.execute(
+        "INSERT INTO inventory_import (import_date, source, filename, row_count) VALUES (?,?,?,?)",
+        (datetime.now().isoformat(), 'shiphero', 'API sync', len(items))
+    )
+    imp_id = imp.lastrowid
+    for it in items:
+        db.execute(
+            'INSERT INTO inventory_item (import_id, sku, product_name, on_hand, available, warehouse) VALUES (?,?,?,?,?,?)',
+            (imp_id, it['sku'], it['product_name'], it['on_hand'], it['available'], it['warehouse'])
+        )
+    db.commit()
+    log_sync('shiphero', 'success', f'{len(items)} SKUs synced', len(items))
+    return jsonify({'ok': True, 'message': f'ShipHero inventory synced: {len(items)} SKUs', 'records': len(items)})
+
+
+@app.route('/sync/shopify', methods=['POST'])
+def sync_shopify():
+    from integrations.shopify_api import fetch_sales
+    creds = get_creds('shopify')
+    if not creds.get('store') or not creds.get('token'):
+        return jsonify({'ok': False, 'message': 'Shopify credentials not configured. Go to Settings.'})
+
+    period_days = request.get_json(silent=True, force=True) or {}
+    period_days = int(period_days.get('period_days', 30))
+
+    try:
+        raw_items = fetch_sales(creds['store'], creds['token'], period_days)
+    except Exception as e:
+        log_sync('shopify', 'error', str(e))
+        return jsonify({'ok': False, 'message': str(e)})
+
+    # Map to ProDough SKUs
+    skus_by_sku = {s['sku']: s for s in load_skus()}
+    items = {}
+    for it in raw_items:
+        sku = it['sku'].strip()
+        if sku not in skus_by_sku:
+            match = next((k for k in skus_by_sku if k.upper() == sku.upper()), None)
+            if not match:
+                continue
+            sku = match
+        if sku in items:
+            items[sku]['units_sold'] += it['units_sold']
+        else:
+            items[sku] = {'sku': sku, 'product_name': skus_by_sku[sku]['display_name'] or it['product_name'], 'units_sold': it['units_sold']}
+
+    item_list = list(items.values())
+    db = get_db()
+    imp = db.execute(
+        'INSERT INTO sales_import (import_date, source, period_days, filename, row_count) VALUES (?,?,?,?,?)',
+        (datetime.now().isoformat(), 'shopify', period_days, 'API sync', len(item_list))
+    )
+    imp_id = imp.lastrowid
+    for it in item_list:
+        db.execute('INSERT INTO sales_item (import_id, sku, product_name, units_sold) VALUES (?,?,?,?)',
+                   (imp_id, it['sku'], it['product_name'], it['units_sold']))
+    db.commit()
+    log_sync('shopify', 'success', f'{len(item_list)} SKUs synced ({period_days}d)', len(item_list))
+    return jsonify({'ok': True, 'message': f'Shopify {period_days}d sales synced: {len(item_list)} SKUs', 'records': len(item_list)})
+
+
+@app.route('/sync/amazon_inventory', methods=['POST'])
+def sync_amazon_inventory():
+    from integrations.amazon_sp import fetch_fba_inventory
+    creds = get_creds('amazon')
+    if not creds.get('refresh_token'):
+        return jsonify({'ok': False, 'message': 'Amazon credentials not configured. Go to Settings.'})
+    try:
+        raw_items = fetch_fba_inventory(creds)
+    except Exception as e:
+        log_sync('amazon_inventory', 'error', str(e))
+        return jsonify({'ok': False, 'message': str(e)})
+
+    _, asin_to_prodough, _ = load_mappings()
+    merchant_to_prodough, _, _ = load_mappings()
+    skus_by_sku = {s['sku']: s for s in load_skus()}
+    seen = {}
+    for it in raw_items:
+        prodough_sku = asin_to_prodough.get(it['asin']) or merchant_to_prodough.get(it['sku'])
+        if not prodough_sku or prodough_sku not in skus_by_sku:
+            continue
+        if prodough_sku in seen:
+            seen[prodough_sku]['on_hand'] += it['on_hand']
+            seen[prodough_sku]['available'] += it['available']
+        else:
+            seen[prodough_sku] = {
+                'sku': prodough_sku,
+                'product_name': skus_by_sku[prodough_sku]['display_name'] or it['product_name'],
+                'on_hand': it['on_hand'],
+                'available': it['available'],
+                'warehouse': 'Amazon FBA',
+            }
+
+    items = list(seen.values())
+    db = get_db()
+    imp = db.execute(
+        "INSERT INTO inventory_import (import_date, source, filename, row_count) VALUES (?,?,?,?)",
+        (datetime.now().isoformat(), 'amazon_fba', 'API sync', len(items))
+    )
+    imp_id = imp.lastrowid
+    for it in items:
+        db.execute('INSERT INTO inventory_item (import_id, sku, product_name, on_hand, available, warehouse) VALUES (?,?,?,?,?,?)',
+                   (imp_id, it['sku'], it['product_name'], it['on_hand'], it['available'], it['warehouse']))
+    db.commit()
+    log_sync('amazon_inventory', 'success', f'{len(items)} SKUs synced', len(items))
+    return jsonify({'ok': True, 'message': f'Amazon FBA inventory synced: {len(items)} SKUs', 'records': len(items)})
+
+
+@app.route('/sync/amazon_sales', methods=['POST'])
+def sync_amazon_sales():
+    """Sync all three Amazon sales periods (15d, 30d, 60d) concurrently."""
+    from integrations.amazon_sp import fetch_sales_report
+    import threading
+
+    creds = get_creds('amazon')
+    if not creds.get('refresh_token'):
+        return jsonify({'ok': False, 'message': 'Amazon credentials not configured. Go to Settings.'})
+
+    _, asin_to_prodough, _ = load_mappings()
+    skus_by_sku = {s['sku']: s for s in load_skus()}
+
+    results = {}
+    errors = {}
+
+    def sync_period(days):
+        try:
+            raw = fetch_sales_report(creds, days)
+            items = {}
+            for it in raw:
+                prodough_sku = asin_to_prodough.get(it['asin'])
+                if not prodough_sku or prodough_sku not in skus_by_sku:
+                    continue
+                items[prodough_sku] = {
+                    'sku': prodough_sku,
+                    'product_name': skus_by_sku[prodough_sku]['display_name'],
+                    'units_sold': it['units_sold'],
+                }
+            results[days] = list(items.values())
+        except Exception as e:
+            errors[days] = str(e)
+
+    threads = [threading.Thread(target=sync_period, args=(d,)) for d in (15, 30, 60)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=360)
+
+    if errors:
+        msg = '; '.join(f'{d}d: {e}' for d, e in errors.items())
+        log_sync('amazon_sales', 'error', msg)
+        return jsonify({'ok': False, 'message': f'Amazon sales sync errors: {msg}'})
+
+    db = get_db()
+    summaries = []
+    for days, items in sorted(results.items()):
+        imp = db.execute(
+            'INSERT INTO sales_import (import_date, source, period_days, filename, row_count) VALUES (?,?,?,?,?)',
+            (datetime.now().isoformat(), 'amazon', days, 'API sync', len(items))
+        )
+        imp_id = imp.lastrowid
+        for it in items:
+            db.execute('INSERT INTO sales_item (import_id, sku, product_name, units_sold) VALUES (?,?,?,?)',
+                       (imp_id, it['sku'], it['product_name'], it['units_sold']))
+        summaries.append(f'{days}d: {len(items)} SKUs')
+    db.commit()
+    msg = 'Amazon sales synced — ' + ', '.join(summaries)
+    log_sync('amazon_sales', 'success', msg, sum(len(v) for v in results.values()))
+    return jsonify({'ok': True, 'message': msg})
+
+
+@app.route('/sync/all', methods=['POST'])
+def sync_all():
+    """Trigger all available syncs sequentially and return combined status."""
+    results = {}
+    with app.test_request_context():
+        pass
+    # Delegate to individual sync endpoints
+    from flask import current_app
+    with current_app.test_request_context():
+        for name, fn in [('shiphero', sync_shiphero), ('shopify', sync_shopify),
+                          ('amazon_inventory', sync_amazon_inventory), ('amazon_sales', sync_amazon_sales)]:
+            creds_key = 'shiphero' if name == 'shiphero' else ('shopify' if name == 'shopify' else 'amazon')
+            c = get_creds(creds_key)
+            if not c:
+                results[name] = {'ok': False, 'message': 'Not configured'}
+                continue
+            try:
+                r = fn()
+                results[name] = r.get_json()
+            except Exception as e:
+                results[name] = {'ok': False, 'message': str(e)}
+    return jsonify(results)
 
 
 if __name__ == '__main__':

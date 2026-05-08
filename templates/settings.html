@@ -1,0 +1,340 @@
+{% extends "base.html" %}
+{% block title %}Settings & API Sync – ProDough Forecasting{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <h4 class="mb-0 fw-bold">Settings & API Sync</h4>
+  <a href="{{ url_for('index') }}" class="btn btn-sm btn-outline-secondary">
+    <i class="bi bi-arrow-left me-1"></i> Dashboard
+  </a>
+</div>
+
+<!-- Sync Now Panel -->
+<div class="card border-0 shadow-sm mb-4 border-primary border-opacity-25">
+  <div class="card-header bg-primary-subtle py-3">
+    <h6 class="fw-semibold mb-0 text-primary">
+      <i class="bi bi-arrow-repeat me-2"></i>Live Data Sync
+    </h6>
+  </div>
+  <div class="card-body">
+    <p class="small text-muted mb-3">
+      Pull fresh data directly from each platform — no file downloads needed.
+      Configure credentials below first, then use these buttons to sync.
+    </p>
+    <div class="row g-2">
+      <div class="col-sm-6 col-lg-3">
+        <div class="card border h-100">
+          <div class="card-body py-3 text-center">
+            <div class="upload-icon bg-primary-subtle text-primary mx-auto mb-2">
+              <i class="bi bi-building fs-5"></i>
+            </div>
+            <div class="small fw-semibold mb-1">ShipHero</div>
+            <div class="tiny text-muted mb-2">All product inventory</div>
+            <button class="btn btn-sm btn-primary w-100 sync-btn" data-service="shiphero"
+                    {% if not sh_creds.get('token') %}disabled title="Configure credentials first"{% endif %}>
+              <i class="bi bi-arrow-repeat me-1"></i> Sync Inventory
+            </button>
+          </div>
+        </div>
+      </div>
+      <div class="col-sm-6 col-lg-3">
+        <div class="card border h-100">
+          <div class="card-body py-3 text-center">
+            <div class="upload-icon bg-success-subtle text-success mx-auto mb-2">
+              <i class="bi bi-shop fs-5"></i>
+            </div>
+            <div class="small fw-semibold mb-1">Shopify</div>
+            <div class="tiny text-muted mb-2">Sales by variant SKU</div>
+            <div class="input-group input-group-sm mb-2">
+              <select class="form-select form-select-sm" id="shopify-period">
+                <option value="15">15 days</option>
+                <option value="30" selected>30 days</option>
+                <option value="60">60 days</option>
+              </select>
+            </div>
+            <button class="btn btn-sm btn-success w-100 sync-btn" data-service="shopify"
+                    {% if not sp_creds.get('token') %}disabled title="Configure credentials first"{% endif %}>
+              <i class="bi bi-arrow-repeat me-1"></i> Sync Sales
+            </button>
+          </div>
+        </div>
+      </div>
+      <div class="col-sm-6 col-lg-3">
+        <div class="card border h-100">
+          <div class="card-body py-3 text-center">
+            <div class="upload-icon bg-warning-subtle text-warning mx-auto mb-2">
+              <i class="bi bi-amazon fs-5"></i>
+            </div>
+            <div class="small fw-semibold mb-1">Amazon FBA Inventory</div>
+            <div class="tiny text-muted mb-2">FBA fulfillable quantities</div>
+            <button class="btn btn-sm btn-warning w-100 sync-btn" data-service="amazon_inventory"
+                    {% if not az_creds.get('refresh_token') %}disabled title="Configure credentials first"{% endif %}>
+              <i class="bi bi-arrow-repeat me-1"></i> Sync Inventory
+            </button>
+          </div>
+        </div>
+      </div>
+      <div class="col-sm-6 col-lg-3">
+        <div class="card border h-100">
+          <div class="card-body py-3 text-center">
+            <div class="upload-icon bg-warning-subtle text-warning mx-auto mb-2">
+              <i class="bi bi-graph-up fs-5"></i>
+            </div>
+            <div class="small fw-semibold mb-1">Amazon Sales</div>
+            <div class="tiny text-muted mb-2">15d + 30d + 60d reports</div>
+            <button class="btn btn-sm btn-warning w-100 sync-btn" data-service="amazon_sales"
+                    {% if not az_creds.get('refresh_token') %}disabled title="Configure credentials first"{% endif %}>
+              <i class="bi bi-arrow-repeat me-1"></i> Sync All Periods
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div id="sync-status" class="mt-3" style="display:none"></div>
+  </div>
+</div>
+
+<!-- Credentials Sections -->
+<div class="row g-4 mb-4">
+
+  <!-- ShipHero -->
+  <div class="col-lg-4">
+    <div class="card border-0 shadow-sm h-100">
+      <div class="card-header bg-white py-3 d-flex align-items-center justify-content-between">
+        <div class="d-flex align-items-center gap-2">
+          <div class="upload-icon bg-primary-subtle text-primary"><i class="bi bi-building fs-5"></i></div>
+          <h6 class="mb-0 fw-semibold">ShipHero</h6>
+        </div>
+        <button class="btn btn-sm btn-outline-secondary test-btn" data-service="shiphero">Test</button>
+      </div>
+      <div class="card-body">
+        <form method="POST">
+          <input type="hidden" name="service" value="shiphero">
+          <div class="mb-3">
+            <label class="form-label small fw-semibold">API Token</label>
+            <input type="password" class="form-control form-control-sm" name="token"
+                   value="{{ sh_creds.get('token', '') }}"
+                   placeholder="Paste your ShipHero API token">
+            <div class="form-text small">
+              ShipHero → Settings → Integrations → API Token
+            </div>
+          </div>
+          <button type="submit" class="btn btn-primary btn-sm w-100">Save Credentials</button>
+        </form>
+
+        <hr class="my-3">
+        <div class="small text-muted">
+          <strong>How to get your API token:</strong>
+          <ol class="mb-0 ps-3 mt-1">
+            <li>Log in to ShipHero</li>
+            <li>Go to Settings → Integrations</li>
+            <li>Click <em>API</em> and copy your token</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Shopify -->
+  <div class="col-lg-4">
+    <div class="card border-0 shadow-sm h-100">
+      <div class="card-header bg-white py-3 d-flex align-items-center justify-content-between">
+        <div class="d-flex align-items-center gap-2">
+          <div class="upload-icon bg-success-subtle text-success"><i class="bi bi-shop fs-5"></i></div>
+          <h6 class="mb-0 fw-semibold">Shopify</h6>
+        </div>
+        <button class="btn btn-sm btn-outline-secondary test-btn" data-service="shopify">Test</button>
+      </div>
+      <div class="card-body">
+        <form method="POST">
+          <input type="hidden" name="service" value="shopify">
+          <div class="mb-2">
+            <label class="form-label small fw-semibold">Store URL</label>
+            <div class="input-group input-group-sm">
+              <input type="text" class="form-control" name="store"
+                     value="{{ sp_creds.get('store', '') }}"
+                     placeholder="your-store-name">
+              <span class="input-group-text text-muted">.myshopify.com</span>
+            </div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label small fw-semibold">Admin API Access Token</label>
+            <input type="password" class="form-control form-control-sm" name="token"
+                   value="{{ sp_creds.get('token', '') }}"
+                   placeholder="shpat_xxxxxxxxxxxx">
+          </div>
+          <button type="submit" class="btn btn-success btn-sm w-100">Save Credentials</button>
+        </form>
+
+        <hr class="my-3">
+        <div class="small text-muted">
+          <strong>How to create a custom app:</strong>
+          <ol class="mb-0 ps-3 mt-1">
+            <li>Admin → Settings → Apps → Develop apps</li>
+            <li>Create app → Configure Admin API scopes</li>
+            <li>Enable: <code>read_orders</code>, <code>read_products</code></li>
+            <li>Install app → copy Access Token</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Amazon -->
+  <div class="col-lg-4">
+    <div class="card border-0 shadow-sm h-100">
+      <div class="card-header bg-white py-3 d-flex align-items-center justify-content-between">
+        <div class="d-flex align-items-center gap-2">
+          <div class="upload-icon bg-warning-subtle text-warning"><i class="bi bi-amazon fs-5"></i></div>
+          <h6 class="mb-0 fw-semibold">Amazon SP-API</h6>
+        </div>
+        <button class="btn btn-sm btn-outline-secondary test-btn" data-service="amazon">Test</button>
+      </div>
+      <div class="card-body">
+        <form method="POST">
+          <input type="hidden" name="service" value="amazon">
+          <div class="mb-2">
+            <label class="form-label small fw-semibold">LWA Client ID</label>
+            <input type="password" class="form-control form-control-sm" name="lwa_app_id"
+                   value="{{ az_creds.get('lwa_app_id', '') }}" placeholder="amzn1.application-oa2-client…">
+          </div>
+          <div class="mb-2">
+            <label class="form-label small fw-semibold">LWA Client Secret</label>
+            <input type="password" class="form-control form-control-sm" name="lwa_client_secret"
+                   value="{{ az_creds.get('lwa_client_secret', '') }}">
+          </div>
+          <div class="mb-2">
+            <label class="form-label small fw-semibold">Refresh Token</label>
+            <input type="password" class="form-control form-control-sm" name="refresh_token"
+                   value="{{ az_creds.get('refresh_token', '') }}" placeholder="Atzr|…">
+          </div>
+          <div class="mb-2">
+            <label class="form-label small fw-semibold">Marketplace ID</label>
+            <select class="form-select form-select-sm" name="marketplace_id">
+              <option value="ATVPDKIKX0DER" {% if az_creds.get('marketplace_id','ATVPDKIKX0DER') == 'ATVPDKIKX0DER' %}selected{% endif %}>US (ATVPDKIKX0DER)</option>
+              <option value="A2EUQ1WTGCTBG2" {% if az_creds.get('marketplace_id') == 'A2EUQ1WTGCTBG2' %}selected{% endif %}>Canada</option>
+              <option value="A1AM78C64UM0Y8" {% if az_creds.get('marketplace_id') == 'A1AM78C64UM0Y8' %}selected{% endif %}>Mexico</option>
+            </select>
+          </div>
+          <button type="submit" class="btn btn-warning btn-sm w-100">Save Credentials</button>
+        </form>
+
+        <hr class="my-3">
+        <div class="small text-muted">
+          <strong>Setup (one-time, ~1 hour):</strong>
+          <ol class="mb-0 ps-3 mt-1">
+            <li>Seller Central → Apps & Services → Develop Apps</li>
+            <li>Register as developer → create app</li>
+            <li>Authorize app to your seller account → copy Refresh Token</li>
+            <li>Copy Client ID & Secret from app page</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Sync History -->
+{% if sync_logs %}
+<div class="card border-0 shadow-sm">
+  <div class="card-header bg-white py-3">
+    <h6 class="fw-semibold mb-0">Sync History</h6>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead class="table-light">
+        <tr>
+          <th class="ps-3">Date</th>
+          <th>Service</th>
+          <th>Status</th>
+          <th>Records</th>
+          <th>Message</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for log in sync_logs %}
+        <tr>
+          <td class="ps-3 small text-muted">{{ log['sync_date'][:16].replace('T',' ') }}</td>
+          <td><span class="badge bg-secondary-subtle text-secondary border small">{{ log['service'] }}</span></td>
+          <td>
+            {% if log['status'] == 'success' %}
+              <span class="badge bg-success-subtle text-success border border-success-subtle">Success</span>
+            {% else %}
+              <span class="badge bg-danger-subtle text-danger border border-danger-subtle">Error</span>
+            {% endif %}
+          </td>
+          <td class="small">{{ log['records_synced'] }}</td>
+          <td class="small text-muted">{{ log['message'] }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Test connection buttons
+document.querySelectorAll('.test-btn').forEach(btn => {
+  btn.addEventListener('click', function() {
+    const service = this.dataset.service;
+    const orig = this.textContent;
+    this.disabled = true;
+    this.textContent = 'Testing…';
+    fetch(`/settings/test/${service}`)
+      .then(r => r.json())
+      .then(d => {
+        this.textContent = orig;
+        this.disabled = false;
+        const cls = d.ok ? 'success' : 'danger';
+        showStatus(d.message, cls);
+      })
+      .catch(() => { this.textContent = orig; this.disabled = false; });
+  });
+});
+
+// Sync buttons
+document.querySelectorAll('.sync-btn').forEach(btn => {
+  btn.addEventListener('click', function() {
+    const service = this.dataset.service;
+    const orig = this.innerHTML;
+    this.disabled = true;
+    this.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Syncing…';
+    showStatus(`Syncing ${service}… this may take a minute.`, 'info');
+
+    let body = {};
+    if (service === 'shopify') {
+      body.period_days = parseInt(document.getElementById('shopify-period').value);
+    }
+
+    fetch(`/sync/${service}`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body)
+    })
+    .then(r => r.json())
+    .then(d => {
+      this.innerHTML = orig;
+      this.disabled = false;
+      showStatus(d.message, d.ok ? 'success' : 'danger');
+      if (d.ok) setTimeout(() => location.reload(), 2000);
+    })
+    .catch(e => {
+      this.innerHTML = orig;
+      this.disabled = false;
+      showStatus('Request failed: ' + e, 'danger');
+    });
+  });
+});
+
+function showStatus(msg, type) {
+  const el = document.getElementById('sync-status');
+  el.style.display = 'block';
+  el.className = `alert alert-${type} alert-dismissible fade show small`;
+  el.innerHTML = msg + '<button type="button" class="btn-close" data-bs-dismiss="alert"></button>';
+}
+</script>
+{% endblock %}

@@ -45,6 +45,11 @@
             <i class="bi bi-calculator"></i> Calculator
           </a>
         </li>
+        <li class="nav-item">
+          <a class="nav-link {% if request.endpoint == 'settings' %}active{% endif %}" href="{{ url_for('settings') }}">
+            <i class="bi bi-gear"></i> Settings & Sync
+          </a>
+        </li>
       </ul>
     </div>
   </div>
