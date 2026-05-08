@@ -15,32 +15,42 @@
       <div class="card-body">
         <form method="POST" action="{{ url_for('forecast') }}">
           <div class="row g-3 mb-4">
-            <!-- Inventory -->
+
+            <!-- Inventory: ShipHero + Amazon FBA checkboxes -->
             <div class="col-12">
               <label class="form-label small fw-semibold">
-                <i class="bi bi-building text-primary me-1"></i> ShipHero Inventory Import
+                <i class="bi bi-boxes text-primary me-1"></i> Inventory Sources
+                <span class="text-muted fw-normal">(select all that apply — quantities are combined)</span>
               </label>
               {% if inv_imports %}
-              <select class="form-select form-select-sm" name="inventory_import_id">
-                <option value="">— None / Skip —</option>
+              <div class="border rounded p-2 bg-light">
                 {% for imp in inv_imports %}
-                <option value="{{ imp['id'] }}"
-                  {% if latest_inv and imp['id'] == latest_inv['id'] %}selected{% endif %}>
-                  {{ imp['import_date'][:10] }} · {{ imp['filename'] or 'Import #' ~ imp['id'] }} · {{ imp['row_count'] }} SKUs
-                </option>
+                <div class="form-check">
+                  <input class="form-check-input" type="checkbox" name="inventory_import_id"
+                         value="{{ imp['id'] }}" id="inv_{{ imp['id'] }}"
+                         {% if loop.index <= 2 %}checked{% endif %}>
+                  <label class="form-check-label small" for="inv_{{ imp['id'] }}">
+                    {% if imp['source'] == 'amazon_fba' %}
+                      <span class="badge bg-warning-subtle text-warning border border-warning-subtle">Amazon FBA</span>
+                    {% else %}
+                      <span class="badge bg-primary-subtle text-primary border border-primary-subtle">ShipHero</span>
+                    {% endif %}
+                    {{ imp['import_date'][:10] }} · {{ imp['filename'] or 'Import #' ~ imp['id'] }} · {{ imp['row_count'] }} SKUs
+                  </label>
+                </div>
                 {% endfor %}
-              </select>
+              </div>
               {% else %}
               <div class="alert alert-warning py-2 mb-0 small">
-                No inventory imports found. <a href="{{ url_for('upload') }}">Upload ShipHero export</a> first.
+                No inventory imports found. <a href="{{ url_for('upload') }}">Upload inventory first.</a>
               </div>
               {% endif %}
             </div>
 
             <!-- Shopify -->
-            <div class="col-md-6">
+            <div class="col-md-5">
               <label class="form-label small fw-semibold">
-                <i class="bi bi-shop text-success me-1"></i> Shopify Sales Import
+                <i class="bi bi-shop text-success me-1"></i> Shopify Sales
               </label>
               {% if shopify_imports %}
               <select class="form-select form-select-sm" name="shopify_import_id">
@@ -57,23 +67,43 @@
               {% endif %}
             </div>
 
-            <!-- Amazon -->
-            <div class="col-md-6">
+            <!-- Amazon Sales: multi-checkbox per period -->
+            <div class="col-md-7">
               <label class="form-label small fw-semibold">
-                <i class="bi bi-amazon text-warning me-1"></i> Amazon Sales Import
+                <i class="bi bi-amazon text-warning me-1"></i> Amazon Sales
+                <span class="text-muted fw-normal">(check all periods to use weighted avg demand)</span>
               </label>
               {% if amazon_imports %}
-              <select class="form-select form-select-sm" name="amazon_import_id">
-                <option value="">— None / Skip —</option>
+              <div class="border rounded p-2 bg-light">
+                {% set periods_seen = [] %}
                 {% for imp in amazon_imports %}
-                <option value="{{ imp['id'] }}"
-                  {% if latest_amazon and imp['id'] == latest_amazon['id'] %}selected{% endif %}>
-                  {{ imp['import_date'][:10] }} · {{ imp['period_days'] }}d · {{ imp['row_count'] }} SKUs
-                </option>
+                  {% if imp['period_days'] not in periods_seen %}
+                    {% set _ = periods_seen.append(imp['period_days']) %}
+                    <div class="form-check">
+                      <input class="form-check-input" type="checkbox" name="amazon_import_ids"
+                             value="{{ imp['id'] }}" id="az_{{ imp['id'] }}" checked>
+                      <label class="form-check-label small" for="az_{{ imp['id'] }}">
+                        {% if imp['period_days'] == 15 %}
+                          <span class="badge bg-danger-subtle text-danger border border-danger-subtle">15d</span>
+                        {% elif imp['period_days'] == 30 %}
+                          <span class="badge bg-warning-subtle text-warning border border-warning-subtle">30d</span>
+                        {% else %}
+                          <span class="badge bg-success-subtle text-success border border-success-subtle">{{ imp['period_days'] }}d</span>
+                        {% endif %}
+                        {{ imp['import_date'][:10] }} · {{ imp['row_count'] }} SKUs
+                      </label>
+                    </div>
+                  {% endif %}
                 {% endfor %}
-              </select>
+                {% if amazon_imports | length == 1 %}
+                <div class="tiny text-muted mt-1 ps-1">
+                  <i class="bi bi-info-circle me-1"></i>
+                  Upload 15d, 30d, and 60d reports for weighted demand averaging.
+                </div>
+                {% endif %}
+              </div>
               {% else %}
-              <div class="alert alert-secondary py-2 mb-0 small">No Amazon imports yet.</div>
+              <div class="alert alert-secondary py-2 mb-0 small">No Amazon sales imports yet.</div>
               {% endif %}
             </div>
 

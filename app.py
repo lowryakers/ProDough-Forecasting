@@ -62,6 +62,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS inventory_import (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             import_date TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'shiphero',
             filename TEXT,
             row_count INTEGER DEFAULT 0
         );
@@ -122,6 +123,12 @@ def init_db():
             FOREIGN KEY (forecast_id) REFERENCES forecast_session(id) ON DELETE CASCADE
         );
     ''')
+    # Migrate: add source column if missing (for existing databases)
+    try:
+        db.execute("ALTER TABLE inventory_import ADD COLUMN source TEXT NOT NULL DEFAULT 'shiphero'")
+        db.commit()
+    except Exception:
+        pass
     db.commit()
     db.close()
 
@@ -294,26 +301,131 @@ def parse_amazon(file_data, filename, period_days):
     return list(items.values())
 
 
+def parse_amazon_fba_inventory(file_data, filename):
+    """Parse Amazon FBA Restock Report (Inventory > FBA Inventory > Reports > Re-stock Report).
+    Returns list of {sku, product_name, on_hand, available}.
+    Handles both TSV (tab-separated) and CSV formats."""
+    _, asin_to_prodough, _ = load_mappings()
+    skus_by_sku = {s['sku']: s for s in load_skus()}
+    items = {}
+
+    try:
+        if filename.endswith('.csv'):
+            df = pd.read_csv(io.BytesIO(file_data))
+        elif filename.endswith('.txt') or filename.endswith('.tsv'):
+            df = pd.read_csv(io.BytesIO(file_data), sep='\t')
+        else:
+            # Try tab first, fall back to comma
+            try:
+                df = pd.read_csv(io.BytesIO(file_data), sep='\t')
+                if len(df.columns) < 3:
+                    df = pd.read_csv(io.BytesIO(file_data))
+            except Exception:
+                df = pd.read_excel(io.BytesIO(file_data))
+    except Exception as e:
+        raise ValueError(f'Could not read file: {e}')
+
+    # Normalize column names
+    df.columns = [
+        str(c).strip().lower()
+          .replace(' ', '_').replace('-', '_')
+          .replace('(', '').replace(')', '')
+        for c in df.columns
+    ]
+
+    # Find ASIN/SKU columns — Amazon restock report uses "asin" and "sku" or "merchant_sku"
+    asin_col = next((c for c in df.columns if c == 'asin'), None)
+    sku_col = next((c for c in df.columns if c in ('sku', 'merchant_sku', 'merchant-sku', 'seller_sku')), None)
+    name_col = next((c for c in df.columns if 'product_name' in c or 'title' in c or 'name' in c), None)
+
+    # Quantity columns — prefer afn (Amazon FBA) over mfn (merchant-fulfilled)
+    # Amazon restock report uses: afn-fulfillable-quantity, afn-total-quantity
+    qty_col = next((c for c in df.columns if c.startswith('afn') and 'fulfillable' in c), None) or \
+              next((c for c in df.columns if 'fulfillable' in c), None) or \
+              next((c for c in df.columns if c == 'available'), None) or \
+              next((c for c in df.columns if 'qty' in c and 'inbound' not in c and 'mfn' not in c), None)
+    total_col = next((c for c in df.columns if c.startswith('afn') and 'total' in c), None) or \
+                next((c for c in df.columns if 'total' in c and 'qty' in c), None) or qty_col
+
+    if not (asin_col or sku_col):
+        raise ValueError('Could not find ASIN or SKU column in Amazon inventory report. '
+                         'Expected columns: asin, sku, merchant-sku')
+    if not qty_col:
+        raise ValueError('Could not find quantity column. Expected: afn-fulfillable-quantity, available, or similar')
+
+    merchant_to_prodough, _, _ = load_mappings()
+
+    for _, row in df.iterrows():
+        prodough_sku = None
+
+        # Try ASIN mapping first
+        if asin_col:
+            asin = str(row.get(asin_col, '')).strip()
+            if asin and asin.lower() not in ('nan', 'none', ''):
+                prodough_sku = asin_to_prodough.get(asin)
+
+        # Fall back to merchant SKU mapping
+        if not prodough_sku and sku_col:
+            raw_sku = str(row.get(sku_col, '')).strip()
+            if raw_sku and raw_sku.lower() not in ('nan', 'none', ''):
+                prodough_sku = merchant_to_prodough.get(raw_sku, raw_sku)
+                if prodough_sku not in skus_by_sku:
+                    prodough_sku = None
+
+        if not prodough_sku:
+            continue
+
+        available = int(float(row.get(qty_col, 0) or 0))
+        on_hand = int(float(row.get(total_col, available) or 0)) if total_col != qty_col else available
+        name = str(row.get(name_col, '')) if name_col else ''
+
+        if prodough_sku in items:
+            items[prodough_sku]['on_hand'] += on_hand
+            items[prodough_sku]['available'] += available
+        else:
+            items[prodough_sku] = {
+                'sku': prodough_sku,
+                'product_name': skus_by_sku.get(prodough_sku, {}).get('display_name', '') or name,
+                'on_hand': on_hand,
+                'available': available,
+                'warehouse': 'Amazon FBA',
+            }
+
+    return list(items.values())
+
+
 # ── Forecast logic ─────────────────────────────────────────────────────────────
 
-def compute_forecast(inventory_import_id, shopify_import_id, amazon_import_id, tier_overrides=None):
-    """Build forecast rows for all SKUs given import IDs."""
+def compute_forecast(inventory_import_id, shopify_import_id, amazon_import_ids, tier_overrides=None):
+    """Build forecast rows for all SKUs given import IDs.
+    amazon_import_ids can be a single int, a list of ints, or None.
+    When multiple Amazon imports are provided (15d/30d/60d), demand is computed
+    as a weighted average: 15d=50%, 30d=35%, 60d=15%.
+    """
     db = get_db()
     all_skus = load_skus()
-    skus_map = {s['sku']: s for s in all_skus}
+
+    # Normalise amazon_import_ids to a list
+    if amazon_import_ids is None:
+        amazon_import_ids = []
+    elif isinstance(amazon_import_ids, int):
+        amazon_import_ids = [amazon_import_ids]
 
     # Load custom tier overrides from DB
     tier_rows = db.execute('SELECT sku, tier FROM sku_tier').fetchall()
     tier_db = {r['sku']: r['tier'] for r in tier_rows}
 
-    # Load inventory
+    # Load inventory — merge ShipHero + Amazon FBA if both present
     inv = {}
     if inventory_import_id:
-        rows = db.execute('SELECT sku, on_hand FROM inventory_item WHERE import_id=?', (inventory_import_id,)).fetchall()
-        for r in rows:
-            inv[r['sku']] = r['on_hand']
+        if not isinstance(inventory_import_id, list):
+            inventory_import_id = [inventory_import_id]
+        for imp_id in inventory_import_id:
+            rows = db.execute('SELECT sku, on_hand FROM inventory_item WHERE import_id=?', (imp_id,)).fetchall()
+            for r in rows:
+                inv[r['sku']] = inv.get(r['sku'], 0) + r['on_hand']
 
-    # Load sales
+    # Load Shopify sales
     shopify_sales = {}
     shopify_days = 30
     if shopify_import_id:
@@ -324,24 +436,44 @@ def compute_forecast(inventory_import_id, shopify_import_id, amazon_import_id, t
         for r in rows:
             shopify_sales[r['sku']] = r['units_sold']
 
-    amazon_sales = {}
-    amazon_days = 30
-    if amazon_import_id:
-        imp = db.execute('SELECT period_days FROM sales_import WHERE id=?', (amazon_import_id,)).fetchone()
-        if imp:
-            amazon_days = imp['period_days']
-        rows = db.execute('SELECT sku, units_sold FROM sales_item WHERE import_id=?', (amazon_import_id,)).fetchall()
-        for r in rows:
-            amazon_sales[r['sku']] = r['units_sold']
+    # Load Amazon sales — weighted average across all provided periods
+    # Weights by period: shortest period = highest weight (most current signal)
+    PERIOD_WEIGHTS = {15: 0.50, 30: 0.35, 60: 0.15}
+
+    amazon_period_data = []  # list of (days, {sku: units})
+    for az_id in amazon_import_ids:
+        imp = db.execute('SELECT period_days FROM sales_import WHERE id=?', (az_id,)).fetchone()
+        if not imp:
+            continue
+        days = imp['period_days']
+        rows = db.execute('SELECT sku, units_sold FROM sales_item WHERE import_id=?', (az_id,)).fetchall()
+        sales = {r['sku']: r['units_sold'] for r in rows}
+        amazon_period_data.append((days, sales))
+
+    # Build weighted Amazon daily demand per SKU
+    def weighted_az_daily(sku):
+        if not amazon_period_data:
+            return 0.0
+        if len(amazon_period_data) == 1:
+            days, sales = amazon_period_data[0]
+            return sales.get(sku, 0) / days if days else 0.0
+        # Multi-period weighted average
+        total_weight = 0.0
+        weighted_sum = 0.0
+        for days, sales in amazon_period_data:
+            w = PERIOD_WEIGHTS.get(days, 1 / days)
+            daily = sales.get(sku, 0) / days if days else 0.0
+            weighted_sum += daily * w
+            total_weight += w
+        return weighted_sum / total_weight if total_weight else 0.0
 
     results = []
     for s in all_skus:
         sku = s['sku']
         current_inv = inv.get(sku, 0)
 
-        # Average daily demand = Shopify daily + Amazon daily
         sh_daily = (shopify_sales.get(sku, 0) / shopify_days) if shopify_days else 0
-        az_daily = (amazon_sales.get(sku, 0) / amazon_days) if amazon_days else 0
+        az_daily = weighted_az_daily(sku)
         avg_daily = sh_daily + az_daily
 
         # Days of demand
@@ -372,6 +504,11 @@ def compute_forecast(inventory_import_id, shopify_import_id, amazon_import_id, t
         weight_g = s['weight_grams']
         super_sacks = (suggested_qty * weight_g / SUPER_SACK_GRAMS) if suggested_qty > 0 else 0
 
+        # Amazon period breakdown for display
+        az_periods = {}
+        for days, sales in amazon_period_data:
+            az_periods[f'az_{days}d'] = sales.get(sku, 0)
+
         results.append({
             'sku': sku,
             'product_name': s['display_name'],
@@ -383,7 +520,7 @@ def compute_forecast(inventory_import_id, shopify_import_id, amazon_import_id, t
             'reorder_point': reorder_point,
             'current_inventory': current_inv,
             'shopify_units': shopify_sales.get(sku, 0),
-            'amazon_units': amazon_sales.get(sku, 0),
+            'amazon_periods': az_periods,
             'shopify_daily': round(sh_daily, 2),
             'amazon_daily': round(az_daily, 2),
             'avg_daily_demand': round(avg_daily, 2),
@@ -435,23 +572,18 @@ def index():
 def upload():
     if request.method == 'POST':
         source = request.form.get('source')
-        file = request.files.get('file')
-        period_days = int(request.form.get('period_days', 30))
-
-        if not file or not file.filename:
-            flash('No file selected.', 'danger')
-            return redirect(url_for('upload'))
-
-        filename = file.filename
-        file_data = file.read()
         db = get_db()
 
         try:
             if source == 'shiphero':
-                items = parse_shiphero(file_data, filename)
+                file = request.files.get('file')
+                if not file or not file.filename:
+                    flash('No file selected.', 'danger')
+                    return redirect(url_for('upload'))
+                items = parse_shiphero(file.read(), file.filename)
                 imp = db.execute(
-                    'INSERT INTO inventory_import (import_date, filename, row_count) VALUES (?,?,?)',
-                    (datetime.now().isoformat(), filename, len(items))
+                    "INSERT INTO inventory_import (import_date, source, filename, row_count) VALUES (?,?,?,?)",
+                    (datetime.now().isoformat(), 'shiphero', file.filename, len(items))
                 )
                 imp_id = imp.lastrowid
                 for it in items:
@@ -462,23 +594,72 @@ def upload():
                 db.commit()
                 flash(f'ShipHero inventory imported: {len(items)} SKUs matched.', 'success')
 
-            elif source in ('shopify', 'amazon'):
-                if source == 'shopify':
-                    items = parse_shopify(file_data, filename, period_days)
-                else:
-                    items = parse_amazon(file_data, filename, period_days)
+            elif source == 'amazon_inventory':
+                file = request.files.get('file')
+                if not file or not file.filename:
+                    flash('No file selected.', 'danger')
+                    return redirect(url_for('upload'))
+                items = parse_amazon_fba_inventory(file.read(), file.filename)
                 imp = db.execute(
-                    'INSERT INTO sales_import (import_date, source, period_days, filename, row_count) VALUES (?,?,?,?,?)',
-                    (datetime.now().isoformat(), source, period_days, filename, len(items))
+                    "INSERT INTO inventory_import (import_date, source, filename, row_count) VALUES (?,?,?,?)",
+                    (datetime.now().isoformat(), 'amazon_fba', file.filename, len(items))
                 )
                 imp_id = imp.lastrowid
                 for it in items:
                     db.execute(
-                        'INSERT INTO sales_item (import_id, sku, product_name, units_sold) VALUES (?,?,?,?)',
-                        (imp_id, it['sku'], it['product_name'], it['units_sold'])
+                        'INSERT INTO inventory_item (import_id, sku, product_name, on_hand, available, warehouse) VALUES (?,?,?,?,?,?)',
+                        (imp_id, it['sku'], it['product_name'], it['on_hand'], it['available'], it['warehouse'])
                     )
                 db.commit()
-                flash(f'{source.title()} sales imported: {len(items)} SKUs matched over {period_days} days.', 'success')
+                flash(f'Amazon FBA inventory imported: {len(items)} SKUs matched.', 'success')
+
+            elif source == 'shopify':
+                file = request.files.get('file')
+                period_days = int(request.form.get('period_days', 30))
+                if not file or not file.filename:
+                    flash('No file selected.', 'danger')
+                    return redirect(url_for('upload'))
+                items = parse_shopify(file.read(), file.filename, period_days)
+                imp = db.execute(
+                    'INSERT INTO sales_import (import_date, source, period_days, filename, row_count) VALUES (?,?,?,?,?)',
+                    (datetime.now().isoformat(), 'shopify', period_days, file.filename, len(items))
+                )
+                imp_id = imp.lastrowid
+                for it in items:
+                    db.execute('INSERT INTO sales_item (import_id, sku, product_name, units_sold) VALUES (?,?,?,?)',
+                               (imp_id, it['sku'], it['product_name'], it['units_sold']))
+                db.commit()
+                flash(f'Shopify sales imported: {len(items)} SKUs matched over {period_days} days.', 'success')
+
+            elif source == 'amazon_sales':
+                # Multi-file: up to three period files uploaded at once
+                period_configs = [
+                    ('file_15d', 15),
+                    ('file_30d', 30),
+                    ('file_60d', 60),
+                ]
+                imported_count = 0
+                for field_name, days in period_configs:
+                    file = request.files.get(field_name)
+                    if not file or not file.filename:
+                        continue
+                    items = parse_amazon(file.read(), file.filename, days)
+                    if not items:
+                        flash(f'Amazon {days}d report: no matching SKUs found in {file.filename}.', 'warning')
+                        continue
+                    imp = db.execute(
+                        'INSERT INTO sales_import (import_date, source, period_days, filename, row_count) VALUES (?,?,?,?,?)',
+                        (datetime.now().isoformat(), 'amazon', days, file.filename, len(items))
+                    )
+                    imp_id = imp.lastrowid
+                    for it in items:
+                        db.execute('INSERT INTO sales_item (import_id, sku, product_name, units_sold) VALUES (?,?,?,?)',
+                                   (imp_id, it['sku'], it['product_name'], it['units_sold']))
+                    imported_count += 1
+                    flash(f'Amazon {days}d sales imported: {len(items)} SKUs matched.', 'success')
+                db.commit()
+                if imported_count == 0:
+                    flash('No Amazon sales files were uploaded.', 'warning')
             else:
                 flash('Unknown source type.', 'danger')
 
@@ -555,22 +736,33 @@ def forecast():
     amazon_imports = db.execute("SELECT * FROM sales_import WHERE source='amazon' ORDER BY import_date DESC").fetchall()
 
     if request.method == 'POST':
-        inv_id = request.form.get('inventory_import_id', type=int)
+        # Inventory: may be multiple (ShipHero + Amazon FBA)
+        inv_ids = request.form.getlist('inventory_import_id')
+        inv_ids = [int(i) for i in inv_ids if i]
+        inv_id = inv_ids if inv_ids else None
+
         sh_id = request.form.get('shopify_import_id', type=int)
-        az_id = request.form.get('amazon_import_id', type=int)
+
+        # Amazon sales: may be multiple periods
+        az_ids = request.form.getlist('amazon_import_ids')
+        az_ids = [int(i) for i in az_ids if i]
+
         po_number = request.form.get('po_number', '').strip()
         notes = request.form.get('notes', '').strip()
 
-        if not inv_id and not sh_id and not az_id:
+        if not inv_id and not sh_id and not az_ids:
             flash('Select at least one data source.', 'danger')
             return redirect(url_for('forecast'))
 
-        rows = compute_forecast(inv_id, sh_id, az_id)
+        rows = compute_forecast(inv_id, sh_id, az_ids)
 
-        # Save forecast
+        # Save forecast — store amazon IDs as comma-separated string
         fs = db.execute(
             'INSERT INTO forecast_session (created_date, po_number, notes, inventory_import_id, shopify_import_id, amazon_import_id) VALUES (?,?,?,?,?,?)',
-            (datetime.now().isoformat(), po_number, notes, inv_id, sh_id, az_id)
+            (datetime.now().isoformat(), po_number, notes,
+             ','.join(str(i) for i in (inv_id or [])),
+             sh_id,
+             ','.join(str(i) for i in az_ids))
         )
         forecast_id = fs.lastrowid
 
@@ -770,18 +962,21 @@ def api_tiers():
 def api_demand_summary():
     """Quick demand summary for dashboard."""
     db = get_db()
-    latest_inv = db.execute('SELECT * FROM inventory_import ORDER BY import_date DESC LIMIT 1').fetchone()
-    latest_sh = db.execute("SELECT * FROM sales_import WHERE source='shopify' ORDER BY import_date DESC LIMIT 1").fetchone()
-    latest_az = db.execute("SELECT * FROM sales_import WHERE source='amazon' ORDER BY import_date DESC LIMIT 1").fetchone()
+    # All inventory imports (ShipHero + Amazon FBA)
+    inv_rows = db.execute('SELECT id FROM inventory_import ORDER BY import_date DESC LIMIT 2').fetchall()
+    inv_ids = [r['id'] for r in inv_rows] or None
 
-    if not any([latest_inv, latest_sh, latest_az]):
+    latest_sh = db.execute("SELECT * FROM sales_import WHERE source='shopify' ORDER BY import_date DESC LIMIT 1").fetchone()
+    # Latest of each Amazon period
+    az_rows = db.execute(
+        "SELECT id FROM sales_import WHERE source='amazon' GROUP BY period_days ORDER BY import_date DESC"
+    ).fetchall()
+    az_ids = [r['id'] for r in az_rows]
+
+    if not inv_ids and not latest_sh and not az_ids:
         return jsonify({'rows': []})
 
-    rows = compute_forecast(
-        latest_inv['id'] if latest_inv else None,
-        latest_sh['id'] if latest_sh else None,
-        latest_az['id'] if latest_az else None,
-    )
+    rows = compute_forecast(inv_ids, latest_sh['id'] if latest_sh else None, az_ids)
 
     summary = [{
         'sku': r['sku'],

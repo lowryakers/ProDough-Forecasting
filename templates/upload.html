@@ -9,52 +9,94 @@
   </a>
 </div>
 
-<div class="row g-4 mb-4">
-  <!-- ShipHero Upload -->
-  <div class="col-md-4">
+<!-- ─── Row 1: Inventory Sources ─────────────────────────────────────────── -->
+<h6 class="text-muted text-uppercase fw-semibold small mb-2 mt-1">
+  <i class="bi bi-boxes me-1"></i> Inventory Sources
+</h6>
+<div class="row g-3 mb-4">
+
+  <!-- ShipHero Inventory -->
+  <div class="col-md-6">
     <div class="card border-0 shadow-sm h-100">
       <div class="card-header bg-white border-bottom py-3">
         <div class="d-flex align-items-center gap-2">
           <div class="upload-icon bg-primary-subtle text-primary"><i class="bi bi-building fs-5"></i></div>
           <div>
             <h6 class="mb-0 fw-semibold">ShipHero Inventory</h6>
-            <small class="text-muted">Current on-hand quantities</small>
+            <small class="text-muted">Products page → Export All Products</small>
           </div>
         </div>
       </div>
       <div class="card-body">
-        <form method="POST" action="{{ url_for('upload') }}" enctype="multipart/form-data">
+        <form method="POST" enctype="multipart/form-data">
           <input type="hidden" name="source" value="shiphero">
           <div class="mb-3">
             <label class="form-label small fw-semibold">Export File <span class="text-muted fw-normal">(CSV or XLSX)</span></label>
             <input type="file" class="form-control form-control-sm" name="file" accept=".csv,.xlsx,.xls" required>
           </div>
           <div class="alert alert-light border small py-2 mb-3">
-            <strong>Expected columns:</strong><br>
-            Name, On Hand, Available, SKU, Warehouse
+            <strong>Expected columns:</strong> Name, On Hand, Available, SKU, Warehouse
           </div>
           <button type="submit" class="btn btn-primary btn-sm w-100">
-            <i class="bi bi-upload me-1"></i> Import Inventory
+            <i class="bi bi-upload me-1"></i> Import ShipHero Inventory
           </button>
         </form>
       </div>
     </div>
   </div>
 
-  <!-- Shopify Upload -->
-  <div class="col-md-4">
+  <!-- Amazon FBA Inventory -->
+  <div class="col-md-6">
+    <div class="card border-0 shadow-sm h-100">
+      <div class="card-header bg-white border-bottom py-3">
+        <div class="d-flex align-items-center gap-2">
+          <div class="upload-icon bg-warning-subtle text-warning"><i class="bi bi-amazon fs-5"></i></div>
+          <div>
+            <h6 class="mb-0 fw-semibold">Amazon FBA Inventory</h6>
+            <small class="text-muted">Inventory → FBA Inventory → Reports → Re-stock Report</small>
+          </div>
+        </div>
+      </div>
+      <div class="card-body">
+        <form method="POST" enctype="multipart/form-data">
+          <input type="hidden" name="source" value="amazon_inventory">
+          <div class="mb-3">
+            <label class="form-label small fw-semibold">Re-stock Report <span class="text-muted fw-normal">(CSV, TXT, or XLSX)</span></label>
+            <input type="file" class="form-control form-control-sm" name="file" accept=".csv,.txt,.tsv,.xlsx,.xls" required>
+          </div>
+          <div class="alert alert-light border small py-2 mb-3">
+            <strong>Expected columns:</strong> ASIN or SKU, fulfillable/available qty, product name
+          </div>
+          <button type="submit" class="btn btn-warning btn-sm w-100">
+            <i class="bi bi-upload me-1"></i> Import Amazon FBA Inventory
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ─── Row 2: Sales Sources ──────────────────────────────────────────────── -->
+<h6 class="text-muted text-uppercase fw-semibold small mb-2">
+  <i class="bi bi-graph-up me-1"></i> Sales Sources
+</h6>
+<div class="row g-3 mb-4">
+
+  <!-- Shopify Sales -->
+  <div class="col-md-5">
     <div class="card border-0 shadow-sm h-100">
       <div class="card-header bg-white border-bottom py-3">
         <div class="d-flex align-items-center gap-2">
           <div class="upload-icon bg-success-subtle text-success"><i class="bi bi-shop fs-5"></i></div>
           <div>
             <h6 class="mb-0 fw-semibold">Shopify Sales</h6>
-            <small class="text-muted">Sales by product variant</small>
+            <small class="text-muted">Reports → Total Sales by Product Variant</small>
           </div>
         </div>
       </div>
       <div class="card-body">
-        <form method="POST" action="{{ url_for('upload') }}" enctype="multipart/form-data">
+        <form method="POST" enctype="multipart/form-data">
           <input type="hidden" name="source" value="shopify">
           <div class="mb-3">
             <label class="form-label small fw-semibold">Report Period</label>
@@ -70,8 +112,7 @@
             <input type="file" class="form-control form-control-sm" name="file" accept=".csv,.xlsx,.xls" required>
           </div>
           <div class="alert alert-light border small py-2 mb-3">
-            <strong>Expected columns:</strong><br>
-            Product variant SKU, Net items sold
+            <strong>Expected columns:</strong> Product variant SKU, Net items sold
           </div>
           <button type="submit" class="btn btn-success btn-sm w-100">
             <i class="bi bi-upload me-1"></i> Import Shopify Sales
@@ -81,53 +122,77 @@
     </div>
   </div>
 
-  <!-- Amazon Upload -->
-  <div class="col-md-4">
+  <!-- Amazon Sales — Multi-period -->
+  <div class="col-md-7">
     <div class="card border-0 shadow-sm h-100">
       <div class="card-header bg-white border-bottom py-3">
         <div class="d-flex align-items-center gap-2">
           <div class="upload-icon bg-warning-subtle text-warning"><i class="bi bi-amazon fs-5"></i></div>
           <div>
-            <h6 class="mb-0 fw-semibold">Amazon Sales</h6>
-            <small class="text-muted">Business Report (Detail Page)</small>
+            <h6 class="mb-0 fw-semibold">Amazon Sales Reports</h6>
+            <small class="text-muted">Reports → Business Reports → Detail Page Sales & Traffic by Child Item</small>
           </div>
         </div>
       </div>
       <div class="card-body">
-        <form method="POST" action="{{ url_for('upload') }}" enctype="multipart/form-data">
-          <input type="hidden" name="source" value="amazon">
-          <div class="mb-3">
-            <label class="form-label small fw-semibold">Report Period</label>
-            <select class="form-select form-select-sm" name="period_days">
-              <option value="15">Last 15 days</option>
-              <option value="30" selected>Last 30 days</option>
-              <option value="60">Last 60 days</option>
-              <option value="90">Last 90 days</option>
-            </select>
+        <form method="POST" enctype="multipart/form-data">
+          <input type="hidden" name="source" value="amazon_sales">
+
+          <p class="small text-muted mb-3">
+            Upload 1, 2, or all 3 period reports at once. The forecast will compute a
+            <strong>weighted average</strong> across periods (15d = 50%, 30d = 35%, 60d = 15%)
+            for the most accurate demand signal.
+          </p>
+
+          <div class="row g-2 mb-3">
+            <div class="col-12">
+              <label class="form-label small fw-semibold d-flex align-items-center gap-2">
+                <span class="badge bg-danger-subtle text-danger border border-danger-subtle">15-day</span>
+                Most Recent Period
+                <span class="text-muted fw-normal">(optional)</span>
+              </label>
+              <input type="file" class="form-control form-control-sm" name="file_15d" accept=".csv,.xlsx,.xls,.txt,.tsv">
+            </div>
+            <div class="col-12">
+              <label class="form-label small fw-semibold d-flex align-items-center gap-2">
+                <span class="badge bg-warning-subtle text-warning border border-warning-subtle">30-day</span>
+                Standard Period
+                <span class="text-muted fw-normal">(optional)</span>
+              </label>
+              <input type="file" class="form-control form-control-sm" name="file_30d" accept=".csv,.xlsx,.xls,.txt,.tsv">
+            </div>
+            <div class="col-12">
+              <label class="form-label small fw-semibold d-flex align-items-center gap-2">
+                <span class="badge bg-success-subtle text-success border border-success-subtle">60-day</span>
+                Longer Trend Period
+                <span class="text-muted fw-normal">(optional)</span>
+              </label>
+              <input type="file" class="form-control form-control-sm" name="file_60d" accept=".csv,.xlsx,.xls,.txt,.tsv">
+            </div>
           </div>
-          <div class="mb-3">
-            <label class="form-label small fw-semibold">Export File <span class="text-muted fw-normal">(CSV or XLSX)</span></label>
-            <input type="file" class="form-control form-control-sm" name="file" accept=".csv,.xlsx,.xls" required>
-          </div>
+
           <div class="alert alert-light border small py-2 mb-3">
-            <strong>Expected columns:</strong><br>
-            (Child) ASIN, Units Ordered, Title
+            <strong>Expected columns:</strong> (Child) ASIN, Units Ordered, Title
           </div>
           <button type="submit" class="btn btn-warning btn-sm w-100">
-            <i class="bi bi-upload me-1"></i> Import Amazon Sales
+            <i class="bi bi-upload me-1"></i> Import Amazon Sales Reports
           </button>
         </form>
       </div>
     </div>
   </div>
+
 </div>
 
-<!-- Import History -->
+<!-- ─── Import History ─────────────────────────────────────────────────────── -->
+<h6 class="text-muted text-uppercase fw-semibold small mb-2">
+  <i class="bi bi-clock-history me-1"></i> Import History
+</h6>
 <div class="row g-3">
   <div class="col-md-6">
     <div class="card border-0 shadow-sm">
       <div class="card-header bg-white d-flex justify-content-between align-items-center py-3">
-        <h6 class="fw-semibold mb-0">Inventory Import History</h6>
+        <h6 class="fw-semibold mb-0">Inventory Imports</h6>
         <span class="badge bg-secondary-subtle text-secondary border">{{ inv_imports | length }}</span>
       </div>
       {% if inv_imports %}
@@ -135,7 +200,14 @@
         {% for imp in inv_imports %}
         <div class="list-group-item d-flex justify-content-between align-items-center py-2 px-3">
           <div>
-            <div class="small fw-semibold">{{ imp['filename'] or 'Unnamed' }}</div>
+            <div class="small fw-semibold d-flex align-items-center gap-2">
+              {% if imp['source'] == 'amazon_fba' %}
+                <span class="badge bg-warning-subtle text-warning border border-warning-subtle">Amazon FBA</span>
+              {% else %}
+                <span class="badge bg-primary-subtle text-primary border border-primary-subtle">ShipHero</span>
+              {% endif %}
+              {{ imp['filename'] or 'Unnamed' }}
+            </div>
             <div class="tiny text-muted">{{ imp['import_date'][:16].replace('T',' ') }} · {{ imp['row_count'] }} SKUs</div>
           </div>
           <form method="POST" action="{{ url_for('delete_import', type='inventory', import_id=imp['id']) }}"
@@ -156,7 +228,7 @@
   <div class="col-md-6">
     <div class="card border-0 shadow-sm">
       <div class="card-header bg-white d-flex justify-content-between align-items-center py-3">
-        <h6 class="fw-semibold mb-0">Sales Import History</h6>
+        <h6 class="fw-semibold mb-0">Sales Imports</h6>
         <span class="badge bg-secondary-subtle text-secondary border">{{ sales_imports | length }}</span>
       </div>
       {% if sales_imports %}
@@ -170,7 +242,8 @@
               {% else %}
                 <span class="badge bg-warning-subtle text-warning border border-warning-subtle">Amazon</span>
               {% endif %}
-              {{ imp['period_days'] }}-day · {{ imp['filename'] or 'Unnamed' }}
+              <span class="badge bg-secondary-subtle text-secondary border">{{ imp['period_days'] }}d</span>
+              {{ imp['filename'] or 'Unnamed' }}
             </div>
             <div class="tiny text-muted">{{ imp['import_date'][:16].replace('T',' ') }} · {{ imp['row_count'] }} SKUs</div>
           </div>
