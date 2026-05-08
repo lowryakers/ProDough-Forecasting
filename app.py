@@ -191,8 +191,8 @@ def parse_shiphero(file_data, filename):
             else:
                 continue  # skip unknown SKUs
 
-        on_hand = int(float(row.get(on_hand_col, 0) or 0))
-        available = int(float(row.get(avail_col, on_hand) or 0)) if avail_col else on_hand
+        on_hand = int(float(str(row.get(on_hand_col, 0) or 0).replace(',', '')))
+        available = int(float(str(row.get(avail_col, on_hand) or 0).replace(',', ''))) if avail_col else on_hand
         name = str(row.get(name_col, '')) if name_col else ''
         warehouse = str(row.get(wh_col, '')) if wh_col else ''
 
@@ -245,7 +245,7 @@ def parse_shopify(file_data, filename, period_days):
                 continue
             sku = match
 
-        qty = int(float(row.get(qty_col, 0) or 0))
+        qty = int(float(str(row.get(qty_col, 0) or 0).replace(',', '')))
         if qty <= 0:
             continue
         name = str(row.get(name_col, '')) if name_col else ''
@@ -296,7 +296,7 @@ def parse_amazon(file_data, filename, period_days):
         if not prodough_sku:
             continue
 
-        units = int(float(row.get(units_col, 0) or 0))
+        units = int(float(str(row.get(units_col, 0) or 0).replace(',', '')))
         if units <= 0:
             continue
         name = str(row.get(title_col, '')) if title_col else ''
