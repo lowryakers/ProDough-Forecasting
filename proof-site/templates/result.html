@@ -1,0 +1,497 @@
+{% extends 'base.html' %}
+{% block title %}Proof Report — ProDough{% endblock %}
+
+{% block content %}
+
+<!-- Loading state -->
+<div id="loadingView" {% if job.status in ('done','error') %}style="display:none"{% endif %}>
+  <div class="card shadow-sm">
+    <div class="card-body py-5 text-center">
+      <div class="spinner-border text-primary mb-3" style="width:3.5rem;height:3.5rem"></div>
+      <h5 class="fw-semibold mb-1" id="pLabel">Processing artwork…</h5>
+      <div class="progress mx-auto mt-3 mb-2" style="max-width:420px;height:12px">
+        <div class="progress-bar progress-bar-striped progress-bar-animated bg-primary"
+             id="pBar" role="progressbar" style="width:5%"></div>
+      </div>
+      <div class="text-muted small" id="pFile">Starting…</div>
+    </div>
+  </div>
+</div>
+
+<!-- Error state -->
+<div id="errorView" {% if job.status != 'error' %}style="display:none"{% endif %}>
+  <div class="alert alert-danger">
+    <h5 class="alert-heading"><i class="bi bi-x-octagon me-2"></i>Processing Failed</h5>
+    <p id="errorMsg" class="mb-2">{{ job.error or '' }}</p>
+    <a href="{{ url_for('index') }}" class="btn btn-outline-danger btn-sm">
+      <i class="bi bi-arrow-left me-1"></i>Back to Upload
+    </a>
+  </div>
+</div>
+
+<!-- Results state -->
+<div id="resultsView" {% if job.status != 'done' %}style="display:none"{% endif %}>
+  <div id="reportRoot">
+    {% if job.status == 'done' %}{{ _report(job)|safe }}{% endif %}
+  </div>
+</div>
+
+{% endblock %}
+
+
+{# ════════════════════════════════════════════════════════════
+   Server-side macros — used on direct page load when done
+   ════════════════════════════════════════════════════════════ #}
+
+{% macro _report(job) %}
+{% set s = job.summary %}
+
+<!-- Header row -->
+<div class="d-flex align-items-center gap-3 mb-4 flex-wrap">
+  <div>
+    <h4 class="mb-0 fw-bold"><i class="bi bi-file-earmark-check text-primary me-2"></i>Proof Report</h4>
+    <div class="text-muted small">Job {{ job.id }} &bull; {{ job.created[:19].replace('T',' ') }}</div>
+  </div>
+  <a href="{{ url_for('index') }}" class="btn btn-outline-secondary btn-sm ms-auto">
+    <i class="bi bi-arrow-left me-1"></i>New Proof
+  </a>
+</div>
+
+<!-- Summary cards -->
+<div class="row g-3 mb-4">
+  <div class="col-6 col-sm-3">
+    <div class="card border-0 shadow-sm text-center h-100">
+      <div class="card-body py-3">
+        <div class="fs-2 fw-bold">{{ s.total_files }}</div>
+        <div class="text-muted small">Files Proofed</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-sm-3">
+    <div class="card border-0 shadow-sm text-center h-100 {{ 'bg-danger text-white' if s.total_critical_issues else 'bg-success text-white' }}">
+      <div class="card-body py-3">
+        <div class="fs-2 fw-bold">{{ s.total_critical_issues }}</div>
+        <div class="small">Critical Issues</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-sm-3">
+    <div class="card border-0 shadow-sm text-center h-100 {{ 'bg-warning' if s.total_warning_issues else 'bg-light' }}">
+      <div class="card-body py-3">
+        <div class="fs-2 fw-bold">{{ s.total_warning_issues }}</div>
+        <div class="text-dark small">Warnings</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-sm-3">
+    <div class="card border-0 shadow-sm text-center h-100 {{ 'bg-success text-white' if s.severity_counts.clean else 'bg-light' }}">
+      <div class="card-body py-3">
+        <div class="fs-2 fw-bold">{{ s.severity_counts.clean }}</div>
+        <div class="small {{ 'text-white' if s.severity_counts.clean else 'text-muted' }}">Clean Files</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- FDA critical callout -->
+{% if s.fda_critical_issues %}
+<div class="alert alert-danger mb-4">
+  <h6 class="alert-heading fw-bold mb-2">
+    <i class="bi bi-shield-exclamation me-2"></i>FDA Audit Risk — Critical Flags
+  </h6>
+  <p class="small mb-2">These would likely be flagged in an FDA inspection. Resolve before going to print.</p>
+  <ul class="mb-0 small">
+    {% for item in s.fda_critical_issues %}
+    <li><strong>{{ item.file }}</strong> — {{ item.message }}</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+<!-- Per-file tabs (multiple files) -->
+{% if job.results | length > 1 %}
+<ul class="nav nav-tabs mb-3" id="fileTabs" role="tablist">
+  {% for r in job.results %}
+  <li class="nav-item" role="presentation">
+    <button class="nav-link small px-3 py-2 {% if loop.first %}active{% endif %}"
+            data-bs-toggle="tab" data-bs-target="#fp{{ loop.index0 }}" type="button">
+      {{ _sev_icon(r.severity) }}
+      {{ r.filename | truncate(28, true, '…') }}
+    </button>
+  </li>
+  {% endfor %}
+</ul>
+<div class="tab-content">
+  {% for r in job.results %}
+  <div class="tab-pane fade {% if loop.first %}show active{% endif %}" id="fp{{ loop.index0 }}">
+    {{ _file_result(r, job.id, loop.index0) }}
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+  {% for r in job.results %}{{ _file_result(r, job.id, loop.index0) }}{% endfor %}
+{% endif %}
+{% endmacro %}
+
+
+{% macro _sev_icon(sev) %}
+  {% if   sev == 'critical' %}<i class="bi bi-x-circle-fill text-danger me-1"></i>
+  {% elif sev == 'warning'  %}<i class="bi bi-exclamation-triangle-fill text-warning me-1"></i>
+  {% elif sev == 'clean'    %}<i class="bi bi-check-circle-fill text-success me-1"></i>
+  {% else                   %}<i class="bi bi-dash-circle text-secondary me-1"></i>
+  {% endif %}
+{% endmacro %}
+
+
+{% macro _file_result(r, job_id, idx) %}
+<div class="row g-4">
+
+  <!-- Artwork image -->
+  <div class="col-lg-5">
+    <div class="card shadow-sm h-100">
+      <div class="card-header small fw-semibold bg-light py-2">Rendered Artwork (200 DPI)</div>
+      <div class="card-body p-2 text-center bg-dark bg-opacity-10">
+        {% if r.img_path %}
+          <img src="{{ url_for('serve_image', job_id=job_id, filename=r.img_path | basename_filter) }}"
+               class="img-fluid rounded shadow-sm" style="max-height:640px;object-fit:contain"
+               alt="{{ r.filename }}">
+        {% else %}
+          <div class="text-muted py-5">
+            <i class="bi bi-image fs-1 d-block mb-2"></i>Image not available
+          </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Check results -->
+  <div class="col-lg-7">
+    {% if r.error %}
+      <div class="alert alert-danger"><strong>Processing error:</strong> {{ r.error }}</div>
+    {% else %}
+
+    <!-- File header -->
+    <div class="d-flex align-items-center gap-2 mb-3">
+      {{ _sev_icon(r.severity) }}
+      <span class="fw-bold text-truncate">{{ r.filename }}</span>
+      {% if r.severity == 'critical' %}
+        <span class="badge bg-danger ms-auto">{{ r.critical_count }} critical</span>
+      {% elif r.severity == 'warning' %}
+        <span class="badge bg-warning text-dark ms-auto">{{ r.warning_count }} warnings</span>
+      {% elif r.severity == 'clean' %}
+        <span class="badge bg-success ms-auto">Clean</span>
+      {% elif r.severity == 'info' %}
+        <span class="badge bg-info text-dark ms-auto">{{ r.info_count }} notes</span>
+      {% endif %}
+    </div>
+
+    {{ _check_card('1','GTIN / Barcode',         'bi-upc-scan',           r.checks.gtin,     idx) }}
+    {{ _check_card('2','Front Call-Out vs NFP',  'bi-clipboard2-pulse',   r.checks.nfp,      idx) }}
+    {{ _check_card('3','Eyemark Contrast',        'bi-eye',                r.checks.eyemark,  idx) }}
+    {{ _check_card('4','Spelling / Brand Name',  'bi-spellcheck',         r.checks.spelling, idx) }}
+    {{ _check_card('5','FDA Audit Risk',          'bi-shield-exclamation', r.checks.fda,      idx, always_open=true) }}
+
+    <!-- OCR text -->
+    {% if r.ocr_preview %}
+    <div class="mt-2">
+      <button class="btn btn-outline-secondary btn-sm" type="button"
+              data-bs-toggle="collapse" data-bs-target="#ocr{{ idx }}">
+        <i class="bi bi-text-paragraph me-1"></i>Show OCR Text
+      </button>
+      <div class="collapse mt-2" id="ocr{{ idx }}">
+        <pre class="bg-light border rounded p-3 small"
+             style="max-height:220px;overflow:auto;white-space:pre-wrap">{{ r.ocr_preview }}</pre>
+      </div>
+    </div>
+    {% endif %}
+
+    {% endif %}
+  </div>
+</div>
+{% endmacro %}
+
+
+{% macro _check_card(num, title, icon, check, idx, always_open=false) %}
+{% if not check %}{% set check = {} %}{% endif %}
+{% set issues = check.get('issues', []) %}
+{% set notes  = check.get('notes',  []) %}
+{% set crits  = issues | selectattr('severity','equalto','critical') | list %}
+{% set warns  = issues | selectattr('severity','equalto','warning')  | list %}
+{% set infos  = issues | selectattr('severity','equalto','info')     | list %}
+{% set card_id = 'chk' ~ num ~ '_' ~ idx %}
+
+<div class="card mb-2 check-card
+  {% if crits %}border-danger{% elif warns %}border-warning{% else %}border-0{% endif %} shadow-sm">
+
+  <div class="card-header d-flex align-items-center gap-2 py-2
+    {% if crits %}bg-danger bg-opacity-10{% elif warns %}bg-warning bg-opacity-10{% else %}bg-light{% endif %}"
+    data-bs-toggle="collapse" data-bs-target="#{{ card_id }}">
+    <i class="bi {{ icon }}
+      {% if crits %}text-danger{% elif warns %}text-warning{% else %}text-secondary{% endif %}"></i>
+    <span class="fw-semibold small flex-grow-1">Check {{ num }}: {{ title }}</span>
+    {% if   crits %}<span class="badge bg-danger">{{ crits|length }} critical</span>
+    {% elif warns %}<span class="badge bg-warning text-dark">{{ warns|length }} warnings</span>
+    {% elif infos %}<span class="badge bg-info text-dark">{{ infos|length }} notes</span>
+    {% else        %}<span class="badge bg-success">OK</span>
+    {% endif %}
+    <i class="bi bi-chevron-down text-muted small"></i>
+  </div>
+
+  <div class="collapse {% if crits or warns or always_open %}show{% endif %}" id="{{ card_id }}">
+    <div class="card-body py-2 small">
+
+      {% for i in crits %}
+      <div class="d-flex gap-2 mb-2 p-2 rounded sev-critical">
+        <i class="bi bi-x-circle-fill text-danger flex-shrink-0 mt-1"></i>
+        <span>{{ i.message }}</span>
+      </div>
+      {% endfor %}
+
+      {% for i in warns %}
+      <div class="d-flex gap-2 mb-2 p-2 rounded sev-warning">
+        <i class="bi bi-exclamation-triangle-fill text-warning flex-shrink-0 mt-1"></i>
+        <span>{{ i.message }}</span>
+      </div>
+      {% endfor %}
+
+      {% for i in infos %}
+      <div class="d-flex gap-2 mb-2 p-2 rounded sev-info">
+        <i class="bi bi-info-circle-fill text-info flex-shrink-0 mt-1"></i>
+        <span>{{ i.message }}</span>
+      </div>
+      {% endfor %}
+
+      {% if notes %}
+      <div class="text-muted mt-1">
+        {% for n in notes %}
+        <div class="d-flex gap-2 mb-1">
+          <i class="bi bi-dot flex-shrink-0"></i><span>{{ n }}</span>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      {% if not issues and not notes %}
+      <span class="text-success"><i class="bi bi-check-circle me-1"></i>No issues detected.</span>
+      {% endif %}
+
+      <!-- Extra data pills -->
+      {% if check.get('found_gtins') %}
+      <div class="mt-2 text-muted">GTINs detected: <code>{{ check.found_gtins | join(', ') }}</code></div>
+      {% endif %}
+      {% if check.get('calories') %}
+      <div class="mt-1 text-muted">Calories found: {{ check.calories | join(', ') }}</div>
+      {% endif %}
+      {% if check.get('proteins') %}
+      <div class="mt-1 text-muted">Protein (g) found: {{ check.proteins | join(', ') }}</div>
+      {% endif %}
+      {% if check.get('contrast') is not none %}
+      <div class="mt-1 text-muted">Eyemark contrast delta: {{ check.contrast }}</div>
+      {% endif %}
+
+    </div>
+  </div>
+</div>
+{% endmacro %}
+
+
+{% block scripts %}
+<script>
+/* ── JS rendering (used when page loads during processing) ── */
+
+const JOB_ID       = "{{ job_id }}";
+const INIT_STATUS  = "{{ job.status }}";
+
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function issueRows(issues) {
+  if (!issues || !issues.length)
+    return '<span class="text-success"><i class="bi bi-check-circle me-1"></i>No issues detected.</span>';
+  return issues.map(i => {
+    const c = i.severity === 'critical' ? 'danger' : i.severity === 'warning' ? 'warning' : 'info';
+    const ic = i.severity === 'critical' ? 'x-circle-fill' : i.severity === 'warning' ? 'exclamation-triangle-fill' : 'info-circle-fill';
+    return `<div class="d-flex gap-2 mb-2 p-2 rounded sev-${i.severity}">
+      <i class="bi bi-${ic} text-${c} flex-shrink-0 mt-1"></i>
+      <span>${esc(i.message)}</span></div>`;
+  }).join('');
+}
+
+function noteRows(notes) {
+  if (!notes || !notes.length) return '';
+  return `<div class="text-muted mt-1">${notes.map(n =>
+    `<div class="d-flex gap-2 mb-1"><i class="bi bi-dot flex-shrink-0"></i><span>${esc(n)}</span></div>`
+  ).join('')}</div>`;
+}
+
+function checkCard(num, title, icon, check, uid, alwaysOpen) {
+  check = check || {};
+  const issues = check.issues || [];
+  const notes  = check.notes  || [];
+  const crits  = issues.filter(i => i.severity === 'critical');
+  const warns  = issues.filter(i => i.severity === 'warning');
+  const infos  = issues.filter(i => i.severity === 'info');
+  const id     = `jschk${num}_${uid}`;
+
+  const hdrCls  = crits.length ? 'bg-danger bg-opacity-10' : warns.length ? 'bg-warning bg-opacity-10' : 'bg-light';
+  const bdrCls  = crits.length ? 'border-danger' : warns.length ? 'border-warning' : 'border-0';
+  const iconCls = crits.length ? 'text-danger' : warns.length ? 'text-warning' : 'text-secondary';
+  const badge   = crits.length ? `<span class="badge bg-danger">${crits.length} critical</span>`
+                : warns.length ? `<span class="badge bg-warning text-dark">${warns.length} warnings</span>`
+                : infos.length ? `<span class="badge bg-info text-dark">${infos.length} notes</span>`
+                :                `<span class="badge bg-success">OK</span>`;
+
+  let extras = '';
+  if (check.found_gtins && check.found_gtins.length)
+    extras += `<div class="mt-2 text-muted">GTINs detected: <code>${check.found_gtins.join(', ')}</code></div>`;
+  if (check.calories && check.calories.length)
+    extras += `<div class="mt-1 text-muted">Calories found: ${check.calories.join(', ')}</div>`;
+  if (check.proteins && check.proteins.length)
+    extras += `<div class="mt-1 text-muted">Protein (g) found: ${check.proteins.join(', ')}</div>`;
+  if (check.contrast != null)
+    extras += `<div class="mt-1 text-muted">Eyemark contrast delta: ${check.contrast}</div>`;
+
+  return `<div class="card mb-2 check-card ${bdrCls} shadow-sm">
+    <div class="card-header d-flex align-items-center gap-2 py-2 ${hdrCls}"
+         data-bs-toggle="collapse" data-bs-target="#${id}" style="cursor:pointer">
+      <i class="bi ${icon} ${iconCls}"></i>
+      <span class="fw-semibold small flex-grow-1">Check ${num}: ${title}</span>
+      ${badge}<i class="bi bi-chevron-down text-muted small"></i>
+    </div>
+    <div class="collapse ${crits.length || warns.length || alwaysOpen ? 'show' : ''}" id="${id}">
+      <div class="card-body py-2 small">
+        ${issueRows(issues)}${noteRows(notes)}${extras}
+      </div>
+    </div>
+  </div>`;
+}
+
+function sevIcon(sev) {
+  if (sev === 'critical') return '<i class="bi bi-x-circle-fill text-danger me-1"></i>';
+  if (sev === 'warning')  return '<i class="bi bi-exclamation-triangle-fill text-warning me-1"></i>';
+  if (sev === 'clean')    return '<i class="bi bi-check-circle-fill text-success me-1"></i>';
+  return '<i class="bi bi-dash-circle text-secondary me-1"></i>';
+}
+
+function sevBadge(r) {
+  if (r.severity === 'critical') return `<span class="badge bg-danger ms-auto">${r.critical_count} critical</span>`;
+  if (r.severity === 'warning')  return `<span class="badge bg-warning text-dark ms-auto">${r.warning_count} warnings</span>`;
+  if (r.severity === 'clean')    return `<span class="badge bg-success ms-auto">Clean</span>`;
+  if (r.severity === 'info')     return `<span class="badge bg-info text-dark ms-auto">${r.info_count} notes</span>`;
+  return '';
+}
+
+function fileResult(r, jobId, idx) {
+  const imgFname = r.img_path ? r.img_path.split('/').pop() : null;
+  const imgHtml  = imgFname
+    ? `<img src="/image/${jobId}/${imgFname}" class="img-fluid rounded shadow-sm"
+            style="max-height:640px;object-fit:contain" alt="${esc(r.filename)}">`
+    : `<div class="text-muted py-5"><i class="bi bi-image fs-1 d-block mb-2"></i>Image not available</div>`;
+
+  const checks = r.checks || {};
+  const uid    = `${jobId}_${idx}`;
+
+  let content = r.error
+    ? `<div class="alert alert-danger"><strong>Error:</strong> ${esc(r.error)}</div>`
+    : `<div class="d-flex align-items-center gap-2 mb-3">
+        ${sevIcon(r.severity)}
+        <span class="fw-bold text-truncate">${esc(r.filename)}</span>
+        ${sevBadge(r)}
+      </div>
+      ${checkCard('1','GTIN / Barcode',        'bi-upc-scan',           checks.gtin,     uid, false)}
+      ${checkCard('2','Front Call-Out vs NFP', 'bi-clipboard2-pulse',   checks.nfp,      uid, false)}
+      ${checkCard('3','Eyemark Contrast',       'bi-eye',                checks.eyemark,  uid, false)}
+      ${checkCard('4','Spelling / Brand Name', 'bi-spellcheck',         checks.spelling, uid, false)}
+      ${checkCard('5','FDA Audit Risk',         'bi-shield-exclamation', checks.fda,      uid, true)}
+      ${r.ocr_preview ? `<div class="mt-2">
+        <button class="btn btn-outline-secondary btn-sm" type="button"
+                data-bs-toggle="collapse" data-bs-target="#jsocr${idx}">
+          <i class="bi bi-text-paragraph me-1"></i>Show OCR Text
+        </button>
+        <div class="collapse mt-2" id="jsocr${idx}">
+          <pre class="bg-light border rounded p-3 small"
+               style="max-height:220px;overflow:auto;white-space:pre-wrap">${esc(r.ocr_preview)}</pre>
+        </div></div>` : ''}`;
+
+  return `<div class="row g-4">
+    <div class="col-lg-5">
+      <div class="card shadow-sm h-100">
+        <div class="card-header small fw-semibold bg-light py-2">Rendered Artwork (200 DPI)</div>
+        <div class="card-body p-2 text-center bg-dark bg-opacity-10">${imgHtml}</div>
+      </div>
+    </div>
+    <div class="col-lg-7">${content}</div>
+  </div>`;
+}
+
+function summaryCards(s) {
+  const crit  = s.total_critical_issues || 0;
+  const warn  = s.total_warning_issues  || 0;
+  const clean = (s.severity_counts || {}).clean || 0;
+  return `<div class="row g-3 mb-4">
+    <div class="col-6 col-sm-3"><div class="card border-0 shadow-sm text-center h-100"><div class="card-body py-3"><div class="fs-2 fw-bold">${s.total_files}</div><div class="text-muted small">Files Proofed</div></div></div></div>
+    <div class="col-6 col-sm-3"><div class="card border-0 shadow-sm text-center h-100 ${crit ? 'bg-danger text-white' : 'bg-success text-white'}"><div class="card-body py-3"><div class="fs-2 fw-bold">${crit}</div><div class="small">Critical Issues</div></div></div></div>
+    <div class="col-6 col-sm-3"><div class="card border-0 shadow-sm text-center h-100 ${warn ? 'bg-warning' : 'bg-light'}"><div class="card-body py-3"><div class="fs-2 fw-bold">${warn}</div><div class="text-dark small">Warnings</div></div></div></div>
+    <div class="col-6 col-sm-3"><div class="card border-0 shadow-sm text-center h-100 ${clean ? 'bg-success text-white' : 'bg-light'}"><div class="card-body py-3"><div class="fs-2 fw-bold">${clean}</div><div class="small ${clean ? 'text-white' : 'text-muted'}">Clean Files</div></div></div></div>
+  </div>`;
+}
+
+function fdaAlert(s) {
+  const fda = s.fda_critical_issues || [];
+  if (!fda.length) return '';
+  return `<div class="alert alert-danger mb-4">
+    <h6 class="alert-heading fw-bold mb-2"><i class="bi bi-shield-exclamation me-2"></i>FDA Audit Risk — Critical Flags</h6>
+    <p class="small mb-2">These would likely be flagged in an FDA inspection. Resolve before going to print.</p>
+    <ul class="mb-0 small">${fda.map(i => `<li><strong>${esc(i.file)}</strong> — ${esc(i.message)}</li>`).join('')}</ul>
+  </div>`;
+}
+
+function buildReport(job) {
+  const results = job.results || [];
+  const hdr = `<div class="d-flex align-items-center gap-3 mb-4 flex-wrap">
+    <div><h4 class="mb-0 fw-bold"><i class="bi bi-file-earmark-check text-primary me-2"></i>Proof Report</h4>
+    <div class="text-muted small">Job ${job.id} &bull; ${job.created.substring(0,19).replace('T',' ')}</div></div>
+    <a href="/" class="btn btn-outline-secondary btn-sm ms-auto"><i class="bi bi-arrow-left me-1"></i>New Proof</a>
+  </div>`;
+
+  if (results.length > 1) {
+    const tabs  = results.map((r, i) => `<li class="nav-item" role="presentation">
+      <button class="nav-link small px-3 py-2 ${i===0?'active':''}"
+              data-bs-toggle="tab" data-bs-target="#jsfp${i}" type="button">
+        ${sevIcon(r.severity)}${esc(r.filename.length>28?r.filename.substring(0,28)+'…':r.filename)}
+      </button></li>`).join('');
+    const panes = results.map((r, i) =>
+      `<div class="tab-pane fade ${i===0?'show active':''}" id="jsfp${i}">${fileResult(r,job.id,i)}</div>`
+    ).join('');
+    return hdr + summaryCards(job.summary) + fdaAlert(job.summary) +
+      `<ul class="nav nav-tabs mb-3">${tabs}</ul><div class="tab-content">${panes}</div>`;
+  }
+  return hdr + summaryCards(job.summary) + fdaAlert(job.summary) +
+    (results[0] ? fileResult(results[0], job.id, 0) : '');
+}
+
+/* ── Polling ── */
+if (INIT_STATUS !== 'done' && INIT_STATUS !== 'error') {
+  const interval = setInterval(async () => {
+    try {
+      const s = await (await fetch(`/api/status/${JOB_ID}`)).json();
+      document.getElementById('pBar').style.width  = Math.max(5, s.progress) + '%';
+      document.getElementById('pLabel').textContent = `Processing… ${s.progress}%`;
+      document.getElementById('pFile').textContent  = s.current_file ? `Current file: ${s.current_file}` : '';
+
+      if (s.status === 'done') {
+        clearInterval(interval);
+        const job = await (await fetch(`/api/result/${JOB_ID}`)).json();
+        document.getElementById('loadingView').style.display = 'none';
+        document.getElementById('reportRoot').innerHTML = buildReport(job);
+        document.getElementById('resultsView').style.display = '';
+      } else if (s.status === 'error') {
+        clearInterval(interval);
+        document.getElementById('loadingView').style.display = 'none';
+        document.getElementById('errorMsg').textContent = s.error || 'Unknown error';
+        document.getElementById('errorView').style.display = '';
+      }
+    } catch (_) {}
+  }, 1500);
+}
+</script>
+{% endblock %}
