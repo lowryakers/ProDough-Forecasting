@@ -81,6 +81,17 @@ def result(job_id):
     return render_template('result.html', job=job, job_id=job_id)
 
 
+@app.route('/summary/<job_id>')
+def summary(job_id):
+    job = proof_engine.get_job(job_id)
+    if not job:
+        flash('Job not found.', 'danger')
+        return redirect(url_for('index'))
+    if job['status'] != 'done':
+        return redirect(url_for('result', job_id=job_id))
+    return render_template('summary.html', job=job, job_id=job_id)
+
+
 # ── API ───────────────────────────────────────────────────────────────────────
 
 @app.route('/api/status/<job_id>')

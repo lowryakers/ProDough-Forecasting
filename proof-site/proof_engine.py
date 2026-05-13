@@ -478,32 +478,55 @@ _SF_CLAIM_PATTERNS = [
 ]
 
 
+def _ocr_is_sparse(ocr_text: str) -> bool:
+    """Return True when OCR yield is so low that absence-based checks are unreliable.
+    Typical print-ready PDFs with outlined text produce < 80 meaningful words.
+    """
+    words = [w for w in ocr_text.split() if len(w) > 2]
+    return len(words) < 80
+
+
 def _check_fda(ocr_text: str, fname: str) -> dict:
     issues, notes = [], []
     tl = ocr_text.lower()
 
     is_supplement = 'supplement facts' in tl
+    sparse = _ocr_is_sparse(ocr_text)
+
+    # ── OCR quality warning ───────────────────────────────────────────────────
+    # Absence-based checks (missing NFP, ingredients, allergens, manufacturer)
+    # are unreliable when OCR text is sparse due to outlined/path text in PDFs.
+    if sparse:
+        notes.append(
+            'Low OCR yield detected — this PDF likely uses text converted to outlines '
+            '(standard for print-ready files). Absence-based checks below (NFP, ingredients, '
+            'allergens, manufacturer info) are flagged as warnings rather than critical issues '
+            'and should all be verified manually against the actual artwork.'
+        )
 
     # ── Required elements ─────────────────────────────────────────────────────
+    # Severity is "warning" (not "critical") for absence-based checks because
+    # outlined text PDFs will not OCR — a missing detection is not proof of absence.
 
     if 'nutrition facts' not in tl and 'supplement facts' not in tl:
         issues.append({
-            'severity': 'critical',
+            'severity': 'warning',
             'message': (
-                'No Nutrition Facts or Supplement Facts panel detected. '
+                'Nutrition Facts (or Supplement Facts) panel not detected via OCR. '
                 'One is required on all packaged food and dietary supplement labels '
                 '(21 CFR 101.9 / 21 CFR 101.36). '
-                'Note: text-as-outlines PDFs will not OCR — verify manually.'
+                'Print-ready PDFs with outlined text will not OCR — verify the panel is present '
+                'and correctly formatted on the actual artwork.'
             ),
         })
 
     if 'ingredient' not in tl:
         issues.append({
-            'severity': 'critical',
+            'severity': 'warning',
             'message': (
-                'No "Ingredients:" list detected. '
+                'Ingredient list not detected via OCR. '
                 'An ingredient declaration is required on virtually all packaged food labels '
-                '(21 CFR 101.4). Verify manually.'
+                '(21 CFR 101.4). Verify manually on the actual artwork.'
             ),
         })
 
@@ -518,43 +541,57 @@ def _check_fda(ocr_text: str, fname: str) -> dict:
 
     if is_whey_product and 'milk' not in tl:
         issues.append({
-            'severity': 'critical',
+            'severity': 'warning',
             'message': (
-                'Whey protein product — "milk" allergen declaration not detected. '
-                'FDA FALCPA (21 USC 343(w)) requires milk to be declared as a major food allergen, '
-                'either in the ingredient list (bolded or in a "contains" statement) or separately. '
-                'An FDA auditor would flag this immediately.'
+                'Whey protein product — "milk" allergen declaration not detected via OCR. '
+                'FDA FALCPA (21 USC 343(w)) requires milk to be declared as a major food allergen '
+                '(in the ingredient list bolded/highlighted, or in a separate "Contains:" statement). '
+                'Verify the allergen statement is present on the actual artwork.'
             ),
         })
     elif is_wheat_product and 'wheat' not in tl:
         issues.append({
             'severity': 'warning',
             'message': (
-                'Wheat-containing product type detected but "wheat" allergen not found in OCR text. '
+                'Wheat-containing product type — "wheat" allergen not detected via OCR. '
                 'FALCPA requires wheat to be declared as a major food allergen (21 USC 343(w)). '
-                'Verify the allergen statement appears on the artwork.'
+                'Verify the allergen statement appears on the actual artwork.'
             ),
         })
     elif not has_allergen_stmt:
         issues.append({
             'severity': 'warning',
             'message': (
-                'No allergen declaration (e.g., "Contains: Milk") detected. '
+                'No allergen declaration (e.g., "Contains: Milk") detected via OCR. '
                 'FALCPA requires declaration of the 9 major allergens: milk, eggs, fish, shellfish, '
                 'tree nuts, peanuts, wheat, soybeans, and sesame (since Jan 2023). '
-                'Verify manually — OCR may have missed it.'
+                'Verify manually on the actual artwork.'
             ),
         })
 
     # Manufacturer / distributor info
-    if not any(ind in tl for ind in ['manufactured by', 'distributed by', 'produced by',
-                                     'manufactured for', 'distributed for', 'llc', 'inc.', 'corp.']):
+    # Expanded detection: company name suffixes, address keywords, ZIP codes,
+    # and explicit "manufactured/distributed by" phrases.
+    _mfr_indicators = [
+        'manufactured by', 'distributed by', 'produced by',
+        'manufactured for', 'distributed for', 'packed by', 'bottled by',
+        'llc', 'inc.', 'corp.', 'company', 'co.', 'group', 'enterprises',
+        'nutrition', 'foods', 'labs', 'ops', 'industries', 'international',
+    ]
+    has_mfr_text = any(ind in tl for ind in _mfr_indicators)
+    has_zip = bool(re.search(r'\b\d{5}\b', ocr_text))  # US ZIP code
+    has_street = bool(re.search(
+        r'\b\d+\s+[NSEW]\.?\s+\d+|\b\d+\s+\w+\s+(st|ave|blvd|dr|rd|ln|way|pkwy|court|ct)\b',
+        tl
+    ))
+
+    if not (has_mfr_text or has_zip or has_street):
         issues.append({
             'severity': 'warning',
             'message': (
-                'No manufacturer or distributor name/address detected. '
+                'Manufacturer or distributor name/address not detected via OCR. '
                 '21 CFR 101.5 requires the name and place of business of the manufacturer, packer, '
-                'or distributor. Verify manually.'
+                'or distributor. Verify it appears on the actual artwork.'
             ),
         })
 
