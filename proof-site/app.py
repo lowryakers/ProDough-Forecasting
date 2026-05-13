@@ -37,13 +37,19 @@ def upload():
         flash('Please select at least one artwork file.', 'danger')
         return redirect(url_for('index'))
 
-    # Parse optional GTIN reference list
-    gtin_rows = []
-    if gtin_file and gtin_file.filename:
-        try:
-            gtin_rows = _parse_gtin_list(gtin_file.read(), gtin_file.filename)
-        except Exception as exc:
-            flash(f'Could not read GTIN list ({exc}) — proceeding without GTIN cross-check.', 'warning')
+    if not gtin_file or not gtin_file.filename:
+        flash('Please upload the Master ProDough SKU & GTIN List — it is required for the GTIN/barcode check.', 'danger')
+        return redirect(url_for('index'))
+
+    # Parse required GTIN reference list
+    try:
+        gtin_rows = _parse_gtin_list(gtin_file.read(), gtin_file.filename)
+        if not gtin_rows:
+            flash('The GTIN list uploaded appears to be empty or unreadable. Check that it is the correct file.', 'danger')
+            return redirect(url_for('index'))
+    except Exception as exc:
+        flash(f'Could not read the GTIN list: {exc}. Upload a valid .xlsx or .csv file.', 'danger')
+        return redirect(url_for('index'))
 
     job_id  = proof_engine.create_job([f.filename for f in artwork_files if f.filename])
     job_dir = os.path.join(UPLOAD_DIR, job_id)
