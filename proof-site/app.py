@@ -7,7 +7,7 @@ from flask import (Flask, render_template, request, redirect,
 import proof_engine
 
 app = Flask(__name__)
-app.secret_key = 'prodough-proof-site-2024'
+app.secret_key = os.environ.get('SECRET_KEY', 'prodough-proof-site-2024-local')
 
 BASE_DIR  = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(BASE_DIR, 'uploads')

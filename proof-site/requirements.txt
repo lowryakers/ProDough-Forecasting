@@ -2,6 +2,7 @@ flask>=3.0.0
 openpyxl>=3.1.0
 Pillow>=10.0.0
 pytesseract>=0.3.13
-# System tools required (install separately):
-#   Mac:   brew install poppler tesseract
-#   Linux: apt install poppler-utils tesseract-ocr
+gunicorn>=21.2.0
+# System tools are installed via Dockerfile (not pip):
+#   poppler-utils  →  pdftoppm
+#   tesseract-ocr  →  tesseract
