@@ -46,6 +46,11 @@
           </a>
         </li>
         <li class="nav-item">
+          <a class="nav-link {% if request.endpoint in ('proof', 'proof_status_page') %}active{% endif %}" href="{{ url_for('proof') }}">
+            <i class="bi bi-file-earmark-check"></i> Artwork Proof
+          </a>
+        </li>
+        <li class="nav-item">
           <a class="nav-link {% if request.endpoint == 'settings' %}active{% endif %}" href="{{ url_for('settings') }}">
             <i class="bi bi-gear"></i> Settings & Sync
           </a>

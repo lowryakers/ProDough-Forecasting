@@ -1,0 +1,512 @@
+{% extends 'base.html' %}
+{% block title %}Proof Report — {{ job_id }} — ProDough{% endblock %}
+
+{% block content %}
+
+<!-- ── Progress / loading view ── -->
+<div id="loadingView" {% if job.status == 'done' or job.status == 'error' %}style="display:none"{% endif %}>
+  <div class="card shadow-sm">
+    <div class="card-body py-5 text-center">
+      <div class="spinner-border text-primary mb-3" style="width:3rem;height:3rem"></div>
+      <h5 class="fw-semibold mb-1" id="progressLabel">Processing artwork…</h5>
+      <div class="progress mx-auto mt-3" style="max-width:400px;height:10px">
+        <div class="progress-bar progress-bar-striped progress-bar-animated" id="progressBar"
+             role="progressbar" style="width:0%"></div>
+      </div>
+      <div class="text-muted small mt-2" id="currentFile">Starting up…</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Error view ── -->
+<div id="errorView" {% if job.status != 'error' %}style="display:none"{% endif %}>
+  <div class="alert alert-danger">
+    <h5><i class="bi bi-x-circle me-2"></i>Job failed</h5>
+    <div id="errorMsg">{{ job.error or '' }}</div>
+    <a href="{{ url_for('proof') }}" class="btn btn-outline-danger btn-sm mt-2">Back to Upload</a>
+  </div>
+</div>
+
+<!-- ── Results view ── -->
+<div id="resultsView" {% if job.status != 'done' %}style="display:none"{% endif %}>
+
+  {# These are rendered server-side on first load if job is done, else filled by JS #}
+  <div id="reportContent">
+    {% if job.status == 'done' %}
+      {{ _render_report(job) }}
+    {% endif %}
+  </div>
+
+</div>
+{% endblock %}
+
+{# ── Macro: full report ── #}
+{% macro _render_report(job) %}
+{% set summary = job.summary %}
+
+<div class="d-flex align-items-center gap-3 mb-3 flex-wrap">
+  <h4 class="mb-0 fw-bold"><i class="bi bi-file-earmark-check me-2 text-primary"></i>Proof Report</h4>
+  <span class="text-muted small">Job {{ job.id }} &bull; {{ job.created[:19].replace('T',' ') }}</span>
+  <a href="{{ url_for('proof') }}" class="btn btn-outline-secondary btn-sm ms-auto">
+    <i class="bi bi-arrow-left me-1"></i> New Proof
+  </a>
+</div>
+
+{# Summary bar #}
+<div class="row g-3 mb-4">
+  <div class="col-6 col-sm-3">
+    <div class="card text-center border-0 shadow-sm h-100">
+      <div class="card-body py-3">
+        <div class="fs-3 fw-bold">{{ summary.total_files }}</div>
+        <div class="text-muted small">Files Proofed</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-sm-3">
+    <div class="card text-center border-0 shadow-sm h-100 {% if summary.total_critical_issues > 0 %}bg-danger text-white{% else %}bg-success text-white{% endif %}">
+      <div class="card-body py-3">
+        <div class="fs-3 fw-bold">{{ summary.total_critical_issues }}</div>
+        <div class="small">Critical Issues</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-sm-3">
+    <div class="card text-center border-0 shadow-sm h-100 {% if summary.total_warning_issues > 0 %}bg-warning{% else %}bg-light{% endif %}">
+      <div class="card-body py-3">
+        <div class="fs-3 fw-bold">{{ summary.total_warning_issues }}</div>
+        <div class="text-dark small">Warnings</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-sm-3">
+    <div class="card text-center border-0 shadow-sm h-100 {% if summary.severity_counts.clean > 0 %}bg-success text-white{% else %}bg-light{% endif %}">
+      <div class="card-body py-3">
+        <div class="fs-3 fw-bold">{{ summary.severity_counts.clean }}</div>
+        <div class="small {% if summary.severity_counts.clean > 0 %}text-white{% else %}text-muted{% endif %}">Clean Files</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{# FDA critical callout #}
+{% if summary.fda_critical_issues %}
+<div class="alert alert-danger border-danger mb-4">
+  <h6 class="alert-heading fw-bold mb-2">
+    <i class="bi bi-shield-exclamation me-2"></i>FDA Audit Risk — Critical Flags
+  </h6>
+  <p class="small mb-2">The following issues would likely be flagged during an FDA audit. Address before going to print.</p>
+  <ul class="mb-0 small">
+    {% for item in summary.fda_critical_issues %}
+    <li><strong>{{ item.file }}</strong> — {{ item.message }}</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+{# Per-file tabs #}
+{% if job.results | length > 1 %}
+<ul class="nav nav-tabs mb-3" id="fileTabs">
+  {% for r in job.results %}
+  <li class="nav-item">
+    <a class="nav-link {% if loop.first %}active{% endif %} small px-3 py-2"
+       data-bs-toggle="tab" href="#file{{ loop.index0 }}">
+      {% if r.severity == 'critical' %}
+        <i class="bi bi-x-circle-fill text-danger me-1"></i>
+      {% elif r.severity == 'warning' %}
+        <i class="bi bi-exclamation-triangle-fill text-warning me-1"></i>
+      {% elif r.severity == 'clean' %}
+        <i class="bi bi-check-circle-fill text-success me-1"></i>
+      {% elif r.severity == 'error' %}
+        <i class="bi bi-bug-fill text-secondary me-1"></i>
+      {% endif %}
+      {{ r.filename | truncate(30, true, '…') }}
+    </a>
+  </li>
+  {% endfor %}
+</ul>
+<div class="tab-content">
+  {% for r in job.results %}
+  <div class="tab-pane fade {% if loop.first %}show active{% endif %}" id="file{{ loop.index0 }}">
+    {{ _render_file_result(r, job.id, loop.index0) }}
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+{% for r in job.results %}
+  {{ _render_file_result(r, job.id, loop.index0) }}
+{% endfor %}
+{% endif %}
+{% endmacro %}
+
+
+{# ── Macro: single file result ── #}
+{% macro _render_file_result(r, job_id, idx) %}
+<div class="row g-4">
+
+  {# Left: rendered artwork #}
+  <div class="col-lg-5">
+    <div class="card shadow-sm h-100">
+      <div class="card-header small fw-semibold bg-light">Rendered Artwork</div>
+      <div class="card-body p-2 text-center">
+        {% if r.img_path %}
+        {% set img_fname = r.img_path | basename_filter %}
+        <img src="{{ url_for('proof_image', job_id=job_id, filename=img_fname) }}"
+             alt="{{ r.filename }}"
+             class="img-fluid rounded"
+             style="max-height:600px;object-fit:contain">
+        {% else %}
+        <div class="text-muted py-5"><i class="bi bi-image fs-1 d-block mb-2"></i>Image not available</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  {# Right: checks #}
+  <div class="col-lg-7">
+
+    {% if r.error %}
+    <div class="alert alert-danger">
+      <strong>Processing error:</strong> {{ r.error }}
+    </div>
+    {% else %}
+
+    {# Severity badge + filename #}
+    <div class="d-flex align-items-center gap-2 mb-3">
+      <h6 class="mb-0 fw-bold text-truncate">{{ r.filename }}</h6>
+      {% if r.severity == 'critical' %}
+        <span class="badge bg-danger ms-auto flex-shrink-0">{{ r.critical_count }} critical</span>
+      {% elif r.severity == 'warning' %}
+        <span class="badge bg-warning text-dark ms-auto flex-shrink-0">{{ r.warning_count }} warnings</span>
+      {% elif r.severity == 'clean' %}
+        <span class="badge bg-success ms-auto flex-shrink-0">Clean</span>
+      {% elif r.severity == 'info' %}
+        <span class="badge bg-info ms-auto flex-shrink-0">{{ r.info_count }} notes</span>
+      {% endif %}
+    </div>
+
+    {# Check 1: GTIN #}
+    {{ _render_check('1', 'GTIN / Barcode', 'bi-upc-scan', r.checks.gtin) }}
+
+    {# Check 2: NFP #}
+    {{ _render_check('2', 'Front Call-Out vs NFP', 'bi-clipboard2-pulse', r.checks.nfp) }}
+
+    {# Check 3: Eyemark #}
+    {{ _render_check('3', 'Eyemark Contrast', 'bi-eye', r.checks.eyemark) }}
+
+    {# Check 4: Spelling #}
+    {{ _render_check('4', 'Spelling / Brand Name', 'bi-spellcheck', r.checks.spelling) }}
+
+    {# Check 5: FDA — expanded by default if there are criticals #}
+    {{ _render_check('5', 'FDA Audit Risk', 'bi-shield-exclamation', r.checks.fda, expanded=true) }}
+
+    {# OCR preview #}
+    {% if r.ocr_preview %}
+    <div class="mt-3">
+      <button class="btn btn-outline-secondary btn-sm" type="button"
+              data-bs-toggle="collapse" data-bs-target="#ocr{{ idx }}">
+        <i class="bi bi-text-paragraph me-1"></i> Show OCR Text
+      </button>
+      <div class="collapse mt-2" id="ocr{{ idx }}">
+        <pre class="bg-light rounded p-3 small" style="max-height:200px;overflow:auto;white-space:pre-wrap">{{ r.ocr_preview }}</pre>
+      </div>
+    </div>
+    {% endif %}
+
+    {% endif %}
+  </div>
+</div>
+{% endmacro %}
+
+
+{# ── Macro: individual check card ── #}
+{% macro _render_check(num, title, icon, check, expanded=false) %}
+{% if not check %}{% set check = {} %}{% endif %}
+{% set issues = check.get('issues', []) if check else [] %}
+{% set notes  = check.get('notes',  []) if check else [] %}
+{% set crits  = issues | selectattr('severity', 'equalto', 'critical') | list %}
+{% set warns  = issues | selectattr('severity', 'equalto', 'warning')  | list %}
+{% set infos  = issues | selectattr('severity', 'equalto', 'info')     | list %}
+
+<div class="card mb-2 {% if crits %}border-danger{% elif warns %}border-warning{% else %}border-0{% endif %} shadow-sm">
+  <div class="card-header d-flex align-items-center gap-2 py-2
+    {% if crits %}bg-danger bg-opacity-10{% elif warns %}bg-warning bg-opacity-10{% else %}bg-light{% endif %}"
+    data-bs-toggle="collapse" data-bs-target="#chk{{ num }}_{{ loop.index0 if loop else 0 }}"
+    style="cursor:pointer">
+    <i class="bi {{ icon }} {% if crits %}text-danger{% elif warns %}text-warning{% else %}text-secondary{% endif %}"></i>
+    <span class="fw-semibold small flex-grow-1">Check {{ num }}: {{ title }}</span>
+    {% if crits %}
+      <span class="badge bg-danger">{{ crits | length }} critical</span>
+    {% elif warns %}
+      <span class="badge bg-warning text-dark">{{ warns | length }} warnings</span>
+    {% elif infos %}
+      <span class="badge bg-info text-dark">{{ infos | length }} notes</span>
+    {% elif issues | length == 0 %}
+      <span class="badge bg-success">OK</span>
+    {% endif %}
+    <i class="bi bi-chevron-down text-muted ms-1 small"></i>
+  </div>
+  <div class="collapse {% if crits or warns or expanded %}show{% endif %}"
+       id="chk{{ num }}_{{ loop.index0 if loop else 0 }}">
+    <div class="card-body py-2 small">
+
+      {% for issue in crits %}
+      <div class="d-flex gap-2 mb-2 p-2 rounded bg-danger bg-opacity-10">
+        <i class="bi bi-x-circle-fill text-danger flex-shrink-0 mt-1"></i>
+        <span>{{ issue.message }}</span>
+      </div>
+      {% endfor %}
+
+      {% for issue in warns %}
+      <div class="d-flex gap-2 mb-2 p-2 rounded bg-warning bg-opacity-10">
+        <i class="bi bi-exclamation-triangle-fill text-warning flex-shrink-0 mt-1"></i>
+        <span>{{ issue.message }}</span>
+      </div>
+      {% endfor %}
+
+      {% for issue in infos %}
+      <div class="d-flex gap-2 mb-2 p-2 rounded bg-info bg-opacity-10">
+        <i class="bi bi-info-circle-fill text-info flex-shrink-0 mt-1"></i>
+        <span>{{ issue.message }}</span>
+      </div>
+      {% endfor %}
+
+      {% if notes %}
+      <div class="text-muted mt-1">
+        {% for note in notes %}
+        <div class="d-flex gap-2 mb-1">
+          <i class="bi bi-dot flex-shrink-0"></i>
+          <span>{{ note }}</span>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      {% if issues | length == 0 and notes | length == 0 %}
+      <span class="text-success"><i class="bi bi-check-circle me-1"></i>No issues detected.</span>
+      {% endif %}
+
+      {# Extra check-specific data #}
+      {% if check.get('found_gtins') %}
+      <div class="mt-1 text-muted">GTINs detected: <code>{{ check.found_gtins | join(', ') }}</code></div>
+      {% endif %}
+      {% if check.get('calories') %}
+      <div class="mt-1 text-muted">Calories detected: {{ check.calories | join(', ') }}</div>
+      {% endif %}
+      {% if check.get('proteins') %}
+      <div class="mt-1 text-muted">Protein (g) detected: {{ check.proteins | join(', ') }}</div>
+      {% endif %}
+      {% if check.get('contrast') is not none %}
+      <div class="mt-1 text-muted">Eyemark contrast delta: {{ check.contrast }}</div>
+      {% endif %}
+
+    </div>
+  </div>
+</div>
+{% endmacro %}
+
+
+{% block scripts %}
+<script>
+const jobId = "{{ job_id }}";
+const initialStatus = "{{ job.status }}";
+
+function renderSeverityBadge(sev, critCount, warnCount, infoCount) {
+  if (sev === 'critical') return `<span class="badge bg-danger">${critCount} critical</span>`;
+  if (sev === 'warning')  return `<span class="badge bg-warning text-dark">${warnCount} warnings</span>`;
+  if (sev === 'clean')    return `<span class="badge bg-success">Clean</span>`;
+  if (sev === 'info')     return `<span class="badge bg-info text-dark">${infoCount} notes</span>`;
+  if (sev === 'error')    return `<span class="badge bg-secondary">Error</span>`;
+  return '';
+}
+
+function renderIssues(issues) {
+  if (!issues || !issues.length) return '<span class="text-success"><i class="bi bi-check-circle me-1"></i>No issues detected.</span>';
+  return issues.map(i => {
+    let cls = i.severity === 'critical' ? 'danger' : i.severity === 'warning' ? 'warning' : 'info';
+    let icon = i.severity === 'critical' ? 'x-circle-fill' : i.severity === 'warning' ? 'exclamation-triangle-fill' : 'info-circle-fill';
+    return `<div class="d-flex gap-2 mb-2 p-2 rounded bg-${cls} bg-opacity-10">
+      <i class="bi bi-${icon} text-${cls} flex-shrink-0 mt-1"></i>
+      <span class="small">${i.message}</span>
+    </div>`;
+  }).join('');
+}
+
+function renderNotes(notes) {
+  if (!notes || !notes.length) return '';
+  return `<div class="text-muted small mt-1">${notes.map(n => `<div class="d-flex gap-2 mb-1"><i class="bi bi-dot flex-shrink-0"></i><span>${n}</span></div>`).join('')}</div>`;
+}
+
+function renderCheck(num, title, icon, check, alwaysOpen) {
+  check = check || {};
+  const issues = check.issues || [];
+  const notes  = check.notes  || [];
+  const crits  = issues.filter(i => i.severity === 'critical');
+  const warns  = issues.filter(i => i.severity === 'warning');
+  const infos  = issues.filter(i => i.severity === 'info');
+  const id = `dyn_chk${num}`;
+
+  let headerCls = crits.length ? 'bg-danger bg-opacity-10' : warns.length ? 'bg-warning bg-opacity-10' : 'bg-light';
+  let borderCls = crits.length ? 'border-danger' : warns.length ? 'border-warning' : 'border-0';
+  let iconCls   = crits.length ? 'text-danger' : warns.length ? 'text-warning' : 'text-secondary';
+  let badge = '';
+  if (crits.length) badge = `<span class="badge bg-danger">${crits.length} critical</span>`;
+  else if (warns.length) badge = `<span class="badge bg-warning text-dark">${warns.length} warnings</span>`;
+  else if (infos.length) badge = `<span class="badge bg-info text-dark">${infos.length} notes</span>`;
+  else badge = `<span class="badge bg-success">OK</span>`;
+
+  const open = (crits.length || warns.length || alwaysOpen) ? 'show' : '';
+
+  let extras = '';
+  if (check.found_gtins && check.found_gtins.length) extras += `<div class="mt-1 text-muted small">GTINs detected: <code>${check.found_gtins.join(', ')}</code></div>`;
+  if (check.calories    && check.calories.length)    extras += `<div class="mt-1 text-muted small">Calories detected: ${check.calories.join(', ')}</div>`;
+  if (check.proteins    && check.proteins.length)    extras += `<div class="mt-1 text-muted small">Protein (g) detected: ${check.proteins.join(', ')}</div>`;
+  if (check.contrast != null)                        extras += `<div class="mt-1 text-muted small">Eyemark contrast delta: ${check.contrast}</div>`;
+
+  return `<div class="card mb-2 ${borderCls} shadow-sm">
+    <div class="card-header d-flex align-items-center gap-2 py-2 ${headerCls}"
+         data-bs-toggle="collapse" data-bs-target="#${id}" style="cursor:pointer">
+      <i class="bi ${icon} ${iconCls}"></i>
+      <span class="fw-semibold small flex-grow-1">Check ${num}: ${title}</span>
+      ${badge}
+      <i class="bi bi-chevron-down text-muted ms-1 small"></i>
+    </div>
+    <div class="collapse ${open}" id="${id}">
+      <div class="card-body py-2 small">
+        ${renderIssues(issues)}
+        ${renderNotes(notes)}
+        ${extras}
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderFileResult(r, jobId, idx) {
+  const imgFname = r.img_path ? r.img_path.split('/').pop() : null;
+  const imgHtml = imgFname
+    ? `<img src="/proof/image/${jobId}/${imgFname}" class="img-fluid rounded" style="max-height:600px;object-fit:contain" alt="${r.filename}">`
+    : `<div class="text-muted py-5"><i class="bi bi-image fs-1 d-block mb-2"></i>Image not available</div>`;
+
+  let checksHtml = '';
+  if (r.error) {
+    checksHtml = `<div class="alert alert-danger"><strong>Processing error:</strong> ${r.error}</div>`;
+  } else {
+    const checks = r.checks || {};
+    checksHtml = `
+      <div class="d-flex align-items-center gap-2 mb-3">
+        <h6 class="mb-0 fw-bold text-truncate">${r.filename}</h6>
+        ${renderSeverityBadge(r.severity, r.critical_count, r.warning_count, r.info_count)}
+      </div>
+      ${renderCheck('1', 'GTIN / Barcode',          'bi-upc-scan',             checks.gtin,     false)}
+      ${renderCheck('2', 'Front Call-Out vs NFP',   'bi-clipboard2-pulse',     checks.nfp,      false)}
+      ${renderCheck('3', 'Eyemark Contrast',         'bi-eye',                  checks.eyemark,  false)}
+      ${renderCheck('4', 'Spelling / Brand Name',   'bi-spellcheck',           checks.spelling, false)}
+      ${renderCheck('5', 'FDA Audit Risk',           'bi-shield-exclamation',   checks.fda,      true)}
+      ${r.ocr_preview ? `<div class="mt-3"><button class="btn btn-outline-secondary btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#ocr${idx}"><i class="bi bi-text-paragraph me-1"></i> Show OCR Text</button><div class="collapse mt-2" id="ocr${idx}"><pre class="bg-light rounded p-3 small" style="max-height:200px;overflow:auto;white-space:pre-wrap">${r.ocr_preview.replace(/</g,'&lt;')}</pre></div></div>` : ''}
+    `;
+  }
+
+  return `<div class="row g-4">
+    <div class="col-lg-5">
+      <div class="card shadow-sm h-100">
+        <div class="card-header small fw-semibold bg-light">Rendered Artwork</div>
+        <div class="card-body p-2 text-center">${imgHtml}</div>
+      </div>
+    </div>
+    <div class="col-lg-7">${checksHtml}</div>
+  </div>`;
+}
+
+function renderSummaryBar(summary) {
+  const crit = summary.total_critical_issues || 0;
+  const warn = summary.total_warning_issues || 0;
+  const clean = (summary.severity_counts || {}).clean || 0;
+  return `<div class="row g-3 mb-4">
+    <div class="col-6 col-sm-3"><div class="card text-center border-0 shadow-sm h-100"><div class="card-body py-3"><div class="fs-3 fw-bold">${summary.total_files}</div><div class="text-muted small">Files Proofed</div></div></div></div>
+    <div class="col-6 col-sm-3"><div class="card text-center border-0 shadow-sm h-100 ${crit > 0 ? 'bg-danger text-white' : 'bg-success text-white'}"><div class="card-body py-3"><div class="fs-3 fw-bold">${crit}</div><div class="small">Critical Issues</div></div></div></div>
+    <div class="col-6 col-sm-3"><div class="card text-center border-0 shadow-sm h-100 ${warn > 0 ? 'bg-warning' : 'bg-light'}"><div class="card-body py-3"><div class="fs-3 fw-bold">${warn}</div><div class="text-dark small">Warnings</div></div></div></div>
+    <div class="col-6 col-sm-3"><div class="card text-center border-0 shadow-sm h-100 ${clean > 0 ? 'bg-success text-white' : 'bg-light'}"><div class="card-body py-3"><div class="fs-3 fw-bold">${clean}</div><div class="small ${clean > 0 ? 'text-white' : 'text-muted'}">Clean Files</div></div></div></div>
+  </div>`;
+}
+
+function renderFDAAlert(summary) {
+  const fda = summary.fda_critical_issues || [];
+  if (!fda.length) return '';
+  return `<div class="alert alert-danger border-danger mb-4">
+    <h6 class="alert-heading fw-bold mb-2"><i class="bi bi-shield-exclamation me-2"></i>FDA Audit Risk — Critical Flags</h6>
+    <p class="small mb-2">The following issues would likely be flagged during an FDA audit. Address before going to print.</p>
+    <ul class="mb-0 small">${fda.map(i => `<li><strong>${i.file}</strong> — ${i.message}</li>`).join('')}</ul>
+  </div>`;
+}
+
+function renderFullReport(job) {
+  const results = job.results || [];
+  let tabsHtml = '', panesHtml = '';
+
+  if (results.length > 1) {
+    results.forEach((r, i) => {
+      const active = i === 0 ? 'active' : '';
+      const sevIcon = r.severity === 'critical' ? '<i class="bi bi-x-circle-fill text-danger me-1"></i>' :
+                      r.severity === 'warning'  ? '<i class="bi bi-exclamation-triangle-fill text-warning me-1"></i>' :
+                      r.severity === 'clean'    ? '<i class="bi bi-check-circle-fill text-success me-1"></i>' :
+                                                  '<i class="bi bi-bug-fill text-secondary me-1"></i>';
+      const label = r.filename.length > 30 ? r.filename.substring(0, 30) + '…' : r.filename;
+      tabsHtml  += `<li class="nav-item"><a class="nav-link ${active} small px-3 py-2" data-bs-toggle="tab" href="#dynFile${i}">${sevIcon}${label}</a></li>`;
+      panesHtml += `<div class="tab-pane fade ${i === 0 ? 'show active' : ''}" id="dynFile${i}">${renderFileResult(r, job.id, i)}</div>`;
+    });
+    return `
+      <div class="d-flex align-items-center gap-3 mb-3 flex-wrap">
+        <h4 class="mb-0 fw-bold"><i class="bi bi-file-earmark-check me-2 text-primary"></i>Proof Report</h4>
+        <span class="text-muted small">Job ${job.id} &bull; ${job.created.substring(0,19).replace('T',' ')}</span>
+        <a href="/proof" class="btn btn-outline-secondary btn-sm ms-auto"><i class="bi bi-arrow-left me-1"></i> New Proof</a>
+      </div>
+      ${renderSummaryBar(job.summary)}
+      ${renderFDAAlert(job.summary)}
+      <ul class="nav nav-tabs mb-3">${tabsHtml}</ul>
+      <div class="tab-content">${panesHtml}</div>`;
+  } else {
+    const r = results[0];
+    return `
+      <div class="d-flex align-items-center gap-3 mb-3 flex-wrap">
+        <h4 class="mb-0 fw-bold"><i class="bi bi-file-earmark-check me-2 text-primary"></i>Proof Report</h4>
+        <span class="text-muted small">Job ${job.id} &bull; ${job.created.substring(0,19).replace('T',' ')}</span>
+        <a href="/proof" class="btn btn-outline-secondary btn-sm ms-auto"><i class="bi bi-arrow-left me-1"></i> New Proof</a>
+      </div>
+      ${renderSummaryBar(job.summary)}
+      ${renderFDAAlert(job.summary)}
+      ${r ? renderFileResult(r, job.id, 0) : ''}`;
+  }
+}
+
+// ── Polling ──────────────────────────────────────────────────────────────────
+
+if (initialStatus !== 'done' && initialStatus !== 'error') {
+  let interval = setInterval(async () => {
+    try {
+      const resp = await fetch(`/proof/api/status/${jobId}`);
+      const data = await resp.json();
+
+      document.getElementById('progressBar').style.width = data.progress + '%';
+      document.getElementById('progressLabel').textContent =
+        data.status === 'running' ? `Processing… ${data.progress}%` : 'Starting…';
+      document.getElementById('currentFile').textContent =
+        data.current_file ? `Current file: ${data.current_file}` : '';
+
+      if (data.status === 'done') {
+        clearInterval(interval);
+        // Fetch full result and render
+        const res2 = await fetch(`/proof/api/result/${jobId}`);
+        const job  = await res2.json();
+        document.getElementById('loadingView').style.display = 'none';
+        document.getElementById('reportContent').innerHTML = renderFullReport(job);
+        document.getElementById('resultsView').style.display = '';
+      } else if (data.status === 'error') {
+        clearInterval(interval);
+        document.getElementById('loadingView').style.display = 'none';
+        document.getElementById('errorMsg').textContent = data.error || 'Unknown error';
+        document.getElementById('errorView').style.display = '';
+      }
+    } catch (e) { /* network glitch, retry next tick */ }
+  }, 1500);
+}
+</script>
+{% endblock %}

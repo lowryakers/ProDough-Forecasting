@@ -1,0 +1,273 @@
+{% extends 'base.html' %}
+{% block title %}Artwork Proof — ProDough{% endblock %}
+
+{% block content %}
+<div class="row g-4">
+
+  <!-- Upload panel -->
+  <div class="col-lg-7">
+    <div class="card shadow-sm">
+      <div class="card-header bg-primary text-white d-flex align-items-center gap-2">
+        <i class="bi bi-file-earmark-check fs-5"></i>
+        <span class="fw-semibold">Artwork Proof Upload</span>
+      </div>
+      <div class="card-body">
+        <p class="text-muted small mb-3">
+          Upload one or more packaging PDFs (artwork, die lines, NFP panels, etc.)
+          and this tool will run a full proofing pass covering GTINs, front call-out
+          vs NFP consistency, eyemark contrast, spelling, and <strong>FDA audit risk flags</strong>.
+        </p>
+
+        <form id="proofForm" action="{{ url_for('proof_upload') }}" method="POST" enctype="multipart/form-data">
+
+          <!-- Artwork files -->
+          <div class="mb-4">
+            <label class="form-label fw-semibold">Artwork Files <span class="text-danger">*</span></label>
+            <div id="dropZone" class="drop-zone border rounded-3 p-4 text-center" onclick="document.getElementById('artworkInput').click()">
+              <i class="bi bi-cloud-upload fs-1 text-muted"></i>
+              <p class="mb-1 mt-2 fw-semibold">Drag &amp; drop PDFs here, or click to browse</p>
+              <p class="text-muted small mb-0">Accepted: .pdf, .ai, .png, .jpg, .tiff, .eps</p>
+            </div>
+            <input type="file" id="artworkInput" name="artwork" multiple accept=".pdf,.ai,.png,.jpg,.jpeg,.tiff,.tif,.eps" class="d-none">
+            <div id="fileList" class="mt-2"></div>
+          </div>
+
+          <!-- Optional GTIN list -->
+          <div class="mb-4">
+            <label class="form-label fw-semibold">Master GTIN / SKU List <span class="text-muted fw-normal">(optional)</span></label>
+            <input type="file" name="gtin_list" accept=".xlsx,.csv" class="form-control">
+            <div class="form-text">
+              Upload the <em>MASTER ProDough SKU &amp; GTIN List.xlsx</em> (or a CSV) to cross-check
+              barcode numbers against your master list.
+            </div>
+          </div>
+
+          <div class="d-flex gap-2">
+            <button type="submit" class="btn btn-primary px-4" id="submitBtn">
+              <i class="bi bi-play-circle me-1"></i> Run Proof
+            </button>
+            <button type="reset" class="btn btn-outline-secondary" onclick="clearFiles()">
+              <i class="bi bi-x-circle me-1"></i> Clear
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- What gets checked -->
+    <div class="card shadow-sm mt-3">
+      <div class="card-header fw-semibold small bg-light">What this tool checks</div>
+      <div class="card-body p-0">
+        <table class="table table-sm table-hover mb-0 small">
+          <tbody>
+            <tr>
+              <td class="ps-3 fw-semibold text-danger" style="width:26px">#1</td>
+              <td class="fw-semibold py-2">GTIN / Barcode</td>
+              <td class="text-muted">Detects 12-digit UPCs via OCR; cross-checks vs master list if provided</td>
+            </tr>
+            <tr>
+              <td class="ps-3 fw-semibold text-warning">#2</td>
+              <td class="fw-semibold py-2">Front Call-Out vs NFP</td>
+              <td class="text-muted">Flags calories, protein grams, and net weight mismatches</td>
+            </tr>
+            <tr>
+              <td class="ps-3 fw-semibold text-info">#3</td>
+              <td class="fw-semibold py-2">Eyemark Contrast</td>
+              <td class="text-muted">Analyzes bottom-right corner brightness delta for bagger photo-eye</td>
+            </tr>
+            <tr>
+              <td class="ps-3 fw-semibold text-success">#4</td>
+              <td class="fw-semibold py-2">Spelling / Brand Name</td>
+              <td class="text-muted">"ProDough" spelling, common flavor misspellings, UK vs US spelling</td>
+            </tr>
+            <tr class="table-warning">
+              <td class="ps-3 fw-semibold text-danger">#5</td>
+              <td class="fw-semibold py-2">FDA Audit Risk</td>
+              <td class="text-muted">
+                Required label elements, allergen declarations, disease claims,
+                structure/function + disclaimer, "Natural" + "Gluten-Free" claims,
+                net weight format, Organic certification, BE disclosure, and more
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Recent jobs -->
+  <div class="col-lg-5">
+    <div class="card shadow-sm">
+      <div class="card-header fw-semibold bg-light d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-clock-history me-1"></i> Recent Proof Jobs</span>
+        <small class="text-muted">This session only</small>
+      </div>
+      {% if jobs %}
+      <div class="list-group list-group-flush">
+        {% for job in jobs %}
+        <a href="{{ url_for('proof_status_page', job_id=job.id) }}"
+           class="list-group-item list-group-item-action px-3 py-2">
+          <div class="d-flex justify-content-between align-items-start">
+            <div class="flex-grow-1 me-2" style="min-width:0">
+              <div class="small fw-semibold text-truncate">
+                {% if job.filenames %}
+                  {{ job.filenames | join(', ') }}
+                {% else %}
+                  Job {{ job.id }}
+                {% endif %}
+              </div>
+              <div class="text-muted" style="font-size:.75rem">{{ job.created[:19].replace('T',' ') }}</div>
+            </div>
+            <div class="flex-shrink-0">
+              {% if job.status == 'done' %}
+                {% set summary = job.summary %}
+                {% if summary.total_critical_issues > 0 %}
+                  <span class="badge bg-danger">{{ summary.total_critical_issues }} critical</span>
+                {% elif summary.total_warning_issues > 0 %}
+                  <span class="badge bg-warning text-dark">{{ summary.total_warning_issues }} warnings</span>
+                {% else %}
+                  <span class="badge bg-success">Clean</span>
+                {% endif %}
+              {% elif job.status == 'running' %}
+                <span class="badge bg-primary">Running…</span>
+              {% elif job.status == 'error' %}
+                <span class="badge bg-danger">Error</span>
+              {% else %}
+                <span class="badge bg-secondary">Pending</span>
+              {% endif %}
+            </div>
+          </div>
+        </a>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="card-body text-muted text-center small py-4">
+        No proof jobs yet this session.
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- Tips -->
+    <div class="card shadow-sm mt-3 border-warning">
+      <div class="card-header fw-semibold bg-warning bg-opacity-10 border-warning small">
+        <i class="bi bi-lightbulb me-1 text-warning"></i> Tips for best results
+      </div>
+      <div class="card-body small text-muted">
+        <ul class="mb-0 ps-3">
+          <li>Export PDFs with <strong>text as outlines</strong> for print, but know that OCR accuracy on outlined text is lower. The tool renders each page at 200 DPI and applies OCR — results are best-effort.</li>
+          <li>Upload one PDF per SKU for the clearest per-SKU report.</li>
+          <li>The GTIN cross-check only works if you upload the master GTIN/SKU spreadsheet.</li>
+          <li>Eyemark analysis uses the bottom-right corner of the rendered image. If your die line puts the eyemark elsewhere, verify that check manually.</li>
+          <li>FDA flags are pattern-matched from OCR text — they are a starting point, not legal advice. Always have a regulatory professional review final labels.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<style>
+.drop-zone {
+  cursor: pointer;
+  border: 2px dashed #0d6efd !important;
+  background: #f8f9ff;
+  transition: background .15s, border-color .15s;
+  min-height: 130px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+.drop-zone.drag-over {
+  background: #e7edff;
+  border-color: #0a58ca !important;
+}
+.file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #e9ecef;
+  border-radius: 20px;
+  padding: 2px 10px 2px 8px;
+  font-size: .8rem;
+  margin: 2px;
+}
+.file-chip .rm {
+  cursor: pointer;
+  color: #6c757d;
+  margin-left: 2px;
+}
+.file-chip .rm:hover { color: #dc3545; }
+</style>
+<script>
+const dropZone = document.getElementById('dropZone');
+const artworkInput = document.getElementById('artworkInput');
+const fileList = document.getElementById('fileList');
+const form = document.getElementById('proofForm');
+
+let selectedFiles = [];
+
+function renderChips() {
+  fileList.innerHTML = '';
+  if (!selectedFiles.length) return;
+  const wrap = document.createElement('div');
+  wrap.className = 'mt-1';
+  selectedFiles.forEach((f, i) => {
+    const chip = document.createElement('span');
+    chip.className = 'file-chip';
+    chip.innerHTML = `<i class="bi bi-file-earmark-pdf text-danger"></i> ${f.name}
+      <span class="rm" data-idx="${i}" title="Remove">&times;</span>`;
+    wrap.appendChild(chip);
+  });
+  fileList.appendChild(wrap);
+  wrap.querySelectorAll('.rm').forEach(btn => {
+    btn.addEventListener('click', () => {
+      selectedFiles.splice(parseInt(btn.dataset.idx), 1);
+      renderChips();
+      syncInput();
+    });
+  });
+}
+
+function syncInput() {
+  const dt = new DataTransfer();
+  selectedFiles.forEach(f => dt.items.add(f));
+  artworkInput.files = dt.files;
+}
+
+function addFiles(fileArr) {
+  const existing = new Set(selectedFiles.map(f => f.name + f.size));
+  for (const f of fileArr) {
+    if (!existing.has(f.name + f.size)) {
+      selectedFiles.push(f);
+      existing.add(f.name + f.size);
+    }
+  }
+  renderChips();
+  syncInput();
+}
+
+function clearFiles() {
+  selectedFiles = [];
+  renderChips();
+  syncInput();
+}
+
+artworkInput.addEventListener('change', () => addFiles(Array.from(artworkInput.files)));
+
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  addFiles(Array.from(e.dataTransfer.files));
+});
+
+form.addEventListener('submit', () => {
+  document.getElementById('submitBtn').disabled = true;
+  document.getElementById('submitBtn').innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Uploading…';
+});
+</script>
+{% endblock %}

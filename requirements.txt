@@ -4,3 +4,6 @@ pandas==2.2.3
 Werkzeug==3.0.6
 requests==2.32.3
 python-amazon-sp-api==1.0.8
+Pillow>=10.0.0
+pytesseract>=0.3.13
+# System deps: poppler-utils (pdftoppm), tesseract-ocr

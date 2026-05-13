@@ -2,21 +2,31 @@ import os
 import json
 import sqlite3
 import io
+import tempfile
 from datetime import datetime
-from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, g
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, g, send_file
 import openpyxl
 import pandas as pd
 
+import proof_engine
+
 app = Flask(__name__)
 app.secret_key = 'prodough-forecasting-2024'
+
+# Jinja filter used in proof_result.html
+@app.template_filter('basename_filter')
+def basename_filter(path):
+    return os.path.basename(path) if path else ''
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, 'instance', 'forecasting.db')
 DATA_DIR = os.path.join(BASE_DIR, 'data')
 UPLOAD_DIR = os.path.join(BASE_DIR, 'uploads')
+PROOF_DIR = os.path.join(BASE_DIR, 'uploads', 'proof')
 
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(PROOF_DIR, exist_ok=True)
 
 SUPER_SACK_GRAMS = 400_000
 
@@ -1323,6 +1333,146 @@ def sync_all():
             except Exception as e:
                 results[name] = {'ok': False, 'message': str(e)}
     return jsonify(results)
+
+
+# ── Artwork Proof routes ──────────────────────────────────────────────────────
+
+ALLOWED_ARTWORK = {'.pdf', '.ai', '.png', '.jpg', '.jpeg', '.tiff', '.tif', '.eps'}
+
+
+def _safe_filename(name: str) -> str:
+    keep = set('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._- ')
+    return ''.join(c if c in keep else '_' for c in name)
+
+
+@app.route('/proof')
+def proof():
+    jobs = proof_engine.list_jobs()
+    return render_template('proof.html', jobs=jobs)
+
+
+@app.route('/proof/upload', methods=['POST'])
+def proof_upload():
+    artwork_files = request.files.getlist('artwork')
+    gtin_file = request.files.get('gtin_list')
+
+    if not artwork_files or all(f.filename == '' for f in artwork_files):
+        flash('Please select at least one artwork file to proof.', 'danger')
+        return redirect(url_for('proof'))
+
+    # Parse GTIN reference if provided
+    gtin_rows = []
+    if gtin_file and gtin_file.filename:
+        try:
+            gtin_rows = _parse_gtin_list(gtin_file.read(), gtin_file.filename)
+        except Exception as exc:
+            flash(f'Could not read GTIN list: {exc} — proceeding without GTIN cross-check.', 'warning')
+
+    # Save artwork files to a job-specific temp directory
+    job_id = proof_engine.create_job([f.filename for f in artwork_files if f.filename])
+    job_dir = os.path.join(PROOF_DIR, job_id)
+    os.makedirs(job_dir, exist_ok=True)
+
+    saved_paths = []
+    skipped = []
+    for f in artwork_files:
+        if not f.filename:
+            continue
+        ext = os.path.splitext(f.filename)[1].lower()
+        if ext not in ALLOWED_ARTWORK:
+            skipped.append(f.filename)
+            continue
+        safe_name = _safe_filename(f.filename)
+        dest = os.path.join(job_dir, safe_name)
+        f.save(dest)
+        saved_paths.append(dest)
+
+    if skipped:
+        flash(f'Skipped unsupported file type(s): {", ".join(skipped)}', 'warning')
+
+    if not saved_paths:
+        flash('No supported artwork files were uploaded.', 'danger')
+        return redirect(url_for('proof'))
+
+    proof_engine.start_job(job_id, saved_paths, gtin_rows, job_dir)
+    return redirect(url_for('proof_status_page', job_id=job_id))
+
+
+def _parse_gtin_list(data: bytes, filename: str) -> list:
+    """Read a GTIN reference file. Accepts .xlsx/.csv.
+    Returns list of {flavor, gtin, sku} dicts."""
+    rows = []
+    if filename.lower().endswith('.csv'):
+        import csv, io as _io
+        reader = csv.DictReader(_io.TextIOWrapper(io.BytesIO(data), errors='replace'))
+        for row in reader:
+            rows.append({k.strip().lower(): v.strip() for k, v in row.items()})
+    else:
+        wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True)
+        for ws in wb.worksheets:
+            headers = None
+            for row in ws.iter_rows(values_only=True):
+                if headers is None:
+                    if row and any(row):
+                        headers = [str(c).strip().lower() if c else '' for c in row]
+                    continue
+                if not any(row):
+                    continue
+                d = dict(zip(headers, row))
+                # Normalise key names
+                gtin_val = d.get('gtin/barcode#') or d.get('gtin') or d.get('barcode') or d.get('upc') or ''
+                flavor_val = d.get('flavor') or d.get('product name') or d.get('name') or ''
+                sku_val = d.get('sku') or ''
+                rows.append({
+                    'gtin': str(gtin_val).strip().replace(' ', ''),
+                    'flavor': str(flavor_val).strip().lower(),
+                    'sku': str(sku_val).strip(),
+                })
+    return [r for r in rows if r.get('gtin') and r['gtin'] != 'nan']
+
+
+@app.route('/proof/job/<job_id>')
+def proof_status_page(job_id):
+    job = proof_engine.get_job(job_id)
+    if not job:
+        flash('Proof job not found.', 'danger')
+        return redirect(url_for('proof'))
+    return render_template('proof_result.html', job=job, job_id=job_id)
+
+
+@app.route('/proof/api/status/<job_id>')
+def proof_api_status(job_id):
+    job = proof_engine.get_job(job_id)
+    if not job:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify({
+        'status': job['status'],
+        'progress': job['progress'],
+        'current_file': job['current_file'],
+        'error': job['error'],
+    })
+
+
+@app.route('/proof/api/result/<job_id>')
+def proof_api_result(job_id):
+    job = proof_engine.get_job(job_id)
+    if not job:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify(job)
+
+
+@app.route('/proof/image/<job_id>/<path:filename>')
+def proof_image(job_id, filename):
+    job_dir = os.path.join(PROOF_DIR, job_id)
+    img_path = os.path.join(job_dir, filename)
+    # Security: ensure path stays within job_dir
+    img_path = os.path.realpath(img_path)
+    job_dir_real = os.path.realpath(job_dir)
+    if not img_path.startswith(job_dir_real):
+        return 'Forbidden', 403
+    if not os.path.exists(img_path):
+        return 'Not found', 404
+    return send_file(img_path, mimetype='image/png')
 
 
 if __name__ == '__main__':
