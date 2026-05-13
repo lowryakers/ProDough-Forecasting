@@ -409,7 +409,7 @@ def _check_eyemark(img, is_film: bool = True, fname: str = '') -> dict:
 
 _MISSPELLINGS = {
     r'pro\s+dough':      'ProDough (no space)',
-    r'prodough(?!®)':    'ProDough (verify capital D and ® symbol)',
+    r'(?<!@)prodough(?!®|shop|\.)': 'ProDough (verify capital D and ® symbol)',
     r'\bcheescake\b':    'cheesecake',
     r'\bbanna\b':        'banana',
     r'\bchoclate\b':     'chocolate',
