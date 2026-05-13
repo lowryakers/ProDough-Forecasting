@@ -104,6 +104,46 @@ def _process_job(job_id: str, pdf_paths: list, gtin_rows: list, work_dir: str):
         _update_job(job_id, status='error', error=str(exc), progress=0)
 
 
+# ── Film vs pouch detection ───────────────────────────────────────────────────
+
+# Eyemark checks only apply to film/rollstock (stick packs, sachets, flow wrap).
+# Pouches, bags, canisters, and jars use a different registration method.
+
+_FILM_KEYWORDS  = {'stick', 'sachet', 'flow', 'rollstock', 'film', 'sleeve',
+                   'wrapper', 'wrap', 'stickpack', 'stick_pack', 'stick-pack'}
+_POUCH_KEYWORDS = {'pouch', 'bag', 'zip', 'mylar', 'doypack', 'doypak',
+                   'standup', 'stand_up', 'stand-up', 'canister', 'jar',
+                   'bottle', 'tub', 'container'}
+
+
+def _is_film_rollstock(fname: str, ocr_text: str = '') -> bool:
+    """Return True if the design is film/rollstock (eyemark check applies).
+    Returns False for pouches, bags, and rigid packaging.
+    Defaults to True (apply the check) when the format cannot be determined.
+    """
+    name = fname.lower()
+    text = ocr_text.lower()
+
+    # Explicit pouch/bag indicators in filename → skip eyemark
+    for kw in _POUCH_KEYWORDS:
+        if kw in name:
+            return False
+
+    # Explicit film/stick-pack indicators → apply eyemark
+    for kw in _FILM_KEYWORDS:
+        if kw in name:
+            return True
+
+    # Fall back to OCR text hints
+    if any(kw in text for kw in _POUCH_KEYWORDS):
+        return False
+    if any(kw in text for kw in _FILM_KEYWORDS):
+        return True
+
+    # Cannot determine — default to applying the check so nothing is silently skipped
+    return True
+
+
 # ── Single-file proofing ──────────────────────────────────────────────────────
 
 def _proof_single(pdf_path: str, gtin_rows: list, work_dir: str) -> dict:
@@ -146,10 +186,12 @@ def _proof_single(pdf_path: str, gtin_rows: list, work_dir: str) -> dict:
         except Exception:
             pass
 
+    is_film = _is_film_rollstock(fname, ocr_text)
+
     checks = {
         'gtin':     _check_gtin(ocr_text, fname, gtin_rows),
         'nfp':      _check_nfp(ocr_text),
-        'eyemark':  _check_eyemark(img),
+        'eyemark':  _check_eyemark(img, is_film, fname),
         'spelling': _check_spelling(ocr_text, fname),
         'fda':      _check_fda(ocr_text, fname),
     }
@@ -299,8 +341,17 @@ def _check_nfp(ocr_text: str) -> dict:
 
 # ── Check 3: Eyemark contrast ─────────────────────────────────────────────────
 
-def _check_eyemark(img) -> dict:
+def _check_eyemark(img, is_film: bool = True, fname: str = '') -> dict:
     issues, notes = [], []
+
+    if not is_film:
+        notes.append(
+            'Eyemark check not applicable — this appears to be a pouch or rigid packaging design. '
+            'Eyemark registration marks are only required for film/rollstock (stick packs, sachets, flow wrap). '
+            'If this file is actually a film design, rename it to include "stick", "sachet", or "film" '
+            'and re-run the proof.'
+        )
+        return {'issues': issues, 'notes': notes, 'contrast': None, 'skipped': True}
 
     if img is None:
         notes.append('Image unavailable — eyemark contrast check skipped.')
