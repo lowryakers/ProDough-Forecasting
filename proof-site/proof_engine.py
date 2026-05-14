@@ -441,69 +441,88 @@ def _check_nfp(ocr_text: str) -> dict:
     }
 
 
-# ── Check 3: Eyemark contrast ─────────────────────────────────────────────────
+# ── Check 3: Eyemark color ────────────────────────────────────────────────────
+# Rule: eyemark MUST be solid black (#000000) or solid white (#FFFFFF).
+# Any other color will cause unreliable photo-eye detection on the production line.
 
 def _check_eyemark(img, is_film: bool = False, fname: str = '') -> dict:
     issues, notes = [], []
 
     if not is_film:
         notes.append(
-            'Eyemark check skipped — this design does not appear to be film/rollstock. '
-            'Eyemark registration marks are only required for film/rollstock (stick packs, sachets, flow wrap). '
-            'To enable this check, include "stick", "sachet", "film", or "rollstock" in the filename.'
+            'Eyemark check skipped — not identified as film/rollstock. '
+            'Include "stick", "sachet", "film", or "rollstock" in the filename to enable.'
         )
-        return {'issues': issues, 'notes': notes, 'contrast': None, 'skipped': True}
+        return {'issues': issues, 'notes': notes, 'eyemark_color': None, 'skipped': True}
 
     if img is None:
-        notes.append('Image unavailable — eyemark contrast check skipped.')
-        return {'issues': issues, 'notes': notes, 'contrast': None}
+        issues.append({
+            'severity': 'warning',
+            'message': 'Image unavailable — eyemark color check could not be performed.',
+        })
+        return {'issues': issues, 'notes': notes, 'eyemark_color': None}
 
     w, h = img.size
     mw = max(1, int(w * 0.10))
     mh = max(1, int(h * 0.08))
 
-    def luma(region):
-        pixels = list(region.getdata())
-        if not pixels:
-            return 128
-        return sum(0.299 * r + 0.587 * g + 0.114 * b for r, g, b in pixels) / len(pixels)
+    mark_region = img.crop((w - mw, h - mh, w, h))
+    pixels = list(mark_region.getdata())
+    if not pixels:
+        return {'issues': issues, 'notes': notes, 'eyemark_color': None}
 
-    mark_region    = img.crop((w - mw, h - mh, w, h))
-    surround_region = img.crop((w - mw * 3, h - mh * 3, w - mw, h - mh))
+    lumas = [0.299 * r + 0.587 * g + 0.114 * b for r, g, b in pixels]
+    min_luma = min(lumas)
+    max_luma = max(lumas)
+    avg_luma = sum(lumas) / len(lumas)
 
-    mark_luma = luma(mark_region)
-    surr_luma = luma(surround_region)
-    contrast  = abs(mark_luma - surr_luma)
+    # A black eyemark leaves very dark pixels (<25); a white eyemark leaves very light pixels (>230).
+    has_black = min_luma < 25
+    has_white = max_luma > 230
 
-    mark_desc = 'dark' if mark_luma < 80 else ('light' if mark_luma > 175 else 'medium')
-    surr_desc = 'dark' if surr_luma < 80 else ('light' if surr_luma > 175 else 'medium')
-
-    notes.append(
-        f'Bottom-right region — eyemark brightness: {mark_luma:.0f} ({mark_desc}), '
-        f'surrounding brightness: {surr_luma:.0f} ({surr_desc}), contrast delta: {contrast:.0f}.'
-    )
-
-    if contrast < 55:
-        issues.append({
-            'severity': 'warning',
-            'message': (
-                f'Low eyemark contrast ({mark_desc} mark on {mark_desc} background, delta {contrast:.0f}). '
-                'The bagger photo-eye may not reliably detect the film position. '
-                'Confirm eyemark color with the print supplier before going to press.'
-            ),
-        })
-    elif contrast < 100:
-        issues.append({
-            'severity': 'info',
-            'message': (
-                f'Borderline eyemark contrast (delta {contrast:.0f}). '
-                'Verify with print supplier that the eyemark is detectable under production conditions.'
-            ),
-        })
+    if has_black and has_white:
+        # Both extremes present — determine which is the eyemark (the minority element)
+        black_count = sum(1 for l in lumas if l < 25)
+        white_count = sum(1 for l in lumas if l > 230)
+        eyemark_color = 'black' if black_count <= white_count else 'white'
+    elif has_black:
+        eyemark_color = 'black'
+    elif has_white:
+        eyemark_color = 'white'
     else:
-        notes.append(f'Eyemark contrast appears adequate (delta {contrast:.0f}).')
+        eyemark_color = 'none'
 
-    return {'issues': issues, 'notes': notes, 'contrast': round(contrast)}
+    if eyemark_color == 'black':
+        notes.append(
+            f'✔ BLACK eyemark detected (darkest pixel: {min_luma:.0f}/255) — OK. '
+            'Solid black eyemark provides reliable photo-eye detection.'
+        )
+    elif eyemark_color == 'white':
+        notes.append(
+            f'✔ WHITE eyemark detected (lightest pixel: {max_luma:.0f}/255) — OK. '
+            'Solid white eyemark provides reliable photo-eye detection.'
+        )
+    else:
+        # Describe the actual color so the designer knows exactly what to fix
+        if avg_luma < 85:
+            color_desc = f'dark grey or a dark color (avg brightness {avg_luma:.0f}/255)'
+        elif avg_luma < 170:
+            color_desc = f'medium grey or a spot color (avg brightness {avg_luma:.0f}/255)'
+        else:
+            color_desc = f'light grey or a light color (avg brightness {avg_luma:.0f}/255)'
+
+        issues.append({
+            'severity': 'critical',
+            'message': (
+                f'Eyemark is not solid black or solid white — detected as {color_desc}. '
+                'The production line photo-eye sensor requires a solid BLACK (#000000) '
+                'or solid WHITE (#FFFFFF) eyemark. A colored or grey eyemark WILL cause '
+                'missed or false triggers on the bagger/sealer. '
+                'Change the eyemark to pure black or pure white before going to press.'
+            ),
+        })
+
+    return {'issues': issues, 'notes': notes, 'eyemark_color': eyemark_color}
 
 
 # ── Check 4: Spelling / brand name ───────────────────────────────────────────
