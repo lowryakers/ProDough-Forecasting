@@ -23,6 +23,12 @@ try:
 except ImportError:
     PIL_AVAILABLE = False
 
+try:
+    from pyzbar.pyzbar import decode as _pyzbar_decode
+    PYZBAR_AVAILABLE = True
+except ImportError:
+    PYZBAR_AVAILABLE = False
+
 _UPLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
 
 # ── In-memory job store ───────────────────────────────────────────────────────
@@ -241,8 +247,11 @@ def _proof_single(pdf_path: str, gtin_rows: list, work_dir: str) -> dict:
 
     is_film = _is_film_rollstock(fname, ocr_text)
 
+    # Scan barcode stripes directly from rendered image (primary GTIN source)
+    barcode_gtins = _scan_barcodes(img_path)
+
     checks = {
-        'gtin':     _check_gtin(ocr_text, fname, gtin_rows),
+        'gtin':     _check_gtin(ocr_text, fname, gtin_rows, barcode_gtins),
         'nfp':      _check_nfp(ocr_text),
         'eyemark':  _check_eyemark(img, is_film, fname),
         'spelling': _check_spelling(ocr_text, fname),
@@ -277,26 +286,75 @@ def _proof_single(pdf_path: str, gtin_rows: list, work_dir: str) -> dict:
     }
 
 
+# ── Barcode scanning ─────────────────────────────────────────────────────────
+
+def _scan_barcodes(img_path: str) -> list:
+    """Decode UPC-A / EAN-13 barcode stripes directly from the rendered PNG.
+    Works on print-ready PDFs where text is outlined — reads the bar pattern,
+    not OCR text.  Returns a list of 12-digit GTIN strings.
+    """
+    if not PYZBAR_AVAILABLE or not PIL_AVAILABLE:
+        return []
+    try:
+        img = Image.open(img_path).convert('RGB')
+        decoded = _pyzbar_decode(img)
+        gtins = []
+        for d in decoded:
+            raw = d.data.decode('utf-8', errors='replace').strip()
+            if not raw.isdigit():
+                continue
+            if len(raw) == 13 and raw.startswith('0'):
+                raw = raw[1:]   # EAN-13 with leading zero → UPC-A 12-digit
+            if len(raw) == 12:
+                gtins.append(raw)
+        return list(dict.fromkeys(gtins))  # deduplicate, preserve order
+    except Exception:
+        return []
+
+
 # ── Check 1: GTIN / barcode ───────────────────────────────────────────────────
 
-def _check_gtin(ocr_text: str, fname: str, gtin_rows: list) -> dict:
+def _check_gtin(ocr_text: str, fname: str, gtin_rows: list,
+                scanned_gtins: list = None) -> dict:
     issues, notes = [], []
+    scanned_gtins = scanned_gtins or []
 
-    raw12 = re.findall(r'\b(\d{12})\b', ocr_text)
-    partial = re.findall(r'\b(\d{5,7})\s+(\d{4,7})\b', ocr_text)
-    for a, b in partial:
-        combined = a + b
-        if len(combined) in (11, 12):
-            raw12.append(combined)
-
-    found = list({g for g in raw12 if g[:3] in ('850', '840', '860', '870', '880', '890', '012', '075', '049')})
-    if not found:
-        found = list(set(raw12))
-
-    if found:
-        notes.append(f'Detected GTIN(s) via OCR: {", ".join(found)}')
+    # Primary: direct barcode-stripe decode (works on all PDFs, outlined or not)
+    if scanned_gtins:
+        found = scanned_gtins
+        notes.append(
+            f'Barcode decoded directly from artwork image: {", ".join(found)}. '
+            'This reads the actual barcode stripes, not OCR text.'
+        )
     else:
-        notes.append('No 12-digit GTIN detected via OCR. Barcodes set as paths/outlines may not OCR. Verify the barcode number manually.')
+        # Fallback: OCR text search for human-readable digits below barcode
+        raw12 = re.findall(r'\b(\d{12})\b', ocr_text)
+        partial = re.findall(r'\b(\d{5,7})\s+(\d{4,7})\b', ocr_text)
+        for a, b in partial:
+            combined = a + b
+            if len(combined) in (11, 12):
+                raw12.append(combined)
+
+        found = list({g for g in raw12 if g[:3] in ('850', '840', '860', '870', '880', '890', '012', '075', '049')})
+        if not found:
+            found = list(set(raw12))
+
+        if found:
+            notes.append(
+                f'GTIN(s) found via OCR of human-readable digits: {", ".join(found)}. '
+                'Barcode stripe scanning was unavailable or did not detect a barcode — '
+                'verify this number matches the actual barcode on the artwork.'
+            )
+        else:
+            issues.append({
+                'severity': 'warning',
+                'message': (
+                    'No barcode detected on this artwork. The barcode scanner could not read the stripes '
+                    'and no 12-digit number was found via OCR. Possible causes: barcode is very small, '
+                    'heavily styled, cropped to the edge, or missing entirely. '
+                    'Verify the barcode is present and correct on the actual artwork file.'
+                ),
+            })
 
     if gtin_rows and found:
         gtin_lookup = {str(r.get('gtin', '')).strip(): str(r.get('flavor', '')).strip().lower()
