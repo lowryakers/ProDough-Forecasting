@@ -30,6 +30,7 @@
     .sev-critical { background: rgba(220,53,69,.08) !important; }
     .sev-warning  { background: rgba(255,193,7,.10) !important; }
     .sev-info     { background: rgba(13,202,240,.08) !important; }
+    .issue-row.dismissed { opacity: .45; text-decoration: line-through; }
   </style>
 </head>
 <body>
@@ -39,6 +40,16 @@
     <a class="navbar-brand fw-bold d-flex align-items-center gap-2" href="/">
       <span class="icon">🍩</span> ProDough Artwork Proof
     </a>
+    <div class="d-flex gap-2 ms-auto">
+      <a href="{{ url_for('index') }}"
+         class="btn btn-sm btn-outline-light {% if request.endpoint == 'index' %}active{% endif %}">
+        <i class="bi bi-upload me-1"></i>Upload
+      </a>
+      <a href="{{ url_for('gtin_page') }}"
+         class="btn btn-sm btn-outline-light {% if request.endpoint == 'gtin_page' %}active{% endif %}">
+        <i class="bi bi-upc-scan me-1"></i>GTIN List
+      </a>
+    </div>
   </div>
 </nav>
 

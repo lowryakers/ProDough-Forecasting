@@ -42,6 +42,7 @@ def create_job(filenames: list) -> str:
             'results': [],
             'summary': {},
             'error': None,
+            'dismissals': {},
         }
     return job_id
 
@@ -60,6 +61,19 @@ def _update_job(job_id: str, **kwargs):
     with _jobs_lock:
         if job_id in _jobs:
             _jobs[job_id].update(kwargs)
+
+
+def set_dismissal(job_id: str, filename: str, check_name: str,
+                  issue_index: int, dismissed: bool) -> bool:
+    with _jobs_lock:
+        if job_id not in _jobs:
+            return False
+        key = f"{filename}|{check_name}|{issue_index}"
+        if dismissed:
+            _jobs[job_id]['dismissals'][key] = True
+        else:
+            _jobs[job_id]['dismissals'].pop(key, None)
+        return True
 
 
 def start_job(job_id: str, pdf_paths: list, gtin_rows: list, work_dir: str):

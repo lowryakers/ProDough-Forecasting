@@ -45,17 +45,24 @@
 
 {% macro _report(job) %}
 {% set s = job.summary %}
+{% set dismissals = job.get('dismissals', {}) %}
 
 <!-- Header row -->
-<div class="d-flex align-items-center gap-3 mb-4 flex-wrap">
+<div class="d-flex align-items-center gap-2 mb-4 flex-wrap">
   <div>
     <h4 class="mb-0 fw-bold"><i class="bi bi-file-earmark-check text-primary me-2"></i>Proof Report</h4>
     <div class="text-muted small">Job {{ job.id }} &bull; {{ job.created[:19].replace('T',' ') }}</div>
   </div>
-  <div class="ms-auto d-flex gap-2">
+  <div class="ms-auto d-flex gap-2 flex-wrap">
     {% if job.status == 'done' %}
+    <a href="{{ url_for('viewer', job_id=job_id) }}" class="btn btn-outline-info btn-sm">
+      <i class="bi bi-zoom-in me-1"></i>Manual Review
+    </a>
     <a href="{{ url_for('summary', job_id=job_id) }}" class="btn btn-outline-primary btn-sm">
       <i class="bi bi-clipboard2-check me-1"></i>Full Summary
+    </a>
+    <a href="{{ url_for('download_report', job_id=job_id) }}" class="btn btn-success btn-sm">
+      <i class="bi bi-download me-1"></i>Download Report
     </a>
     {% endif %}
     <a href="{{ url_for('index') }}" class="btn btn-outline-secondary btn-sm">
@@ -115,6 +122,13 @@
 </div>
 {% endif %}
 
+<!-- Dismiss tip -->
+<div class="alert alert-light border small d-flex align-items-center gap-2 mb-3 py-2">
+  <i class="bi bi-check2-square text-secondary fs-5"></i>
+  <span>Click <strong>Dismiss</strong> on any flag you've manually verified and confirmed is not an issue.
+  Dismissed flags are excluded from the downloaded report.</span>
+</div>
+
 <!-- Per-file tabs (multiple files) -->
 {% if job.results | length > 1 %}
 <ul class="nav nav-tabs mb-3" id="fileTabs" role="tablist">
@@ -131,12 +145,12 @@
 <div class="tab-content">
   {% for r in job.results %}
   <div class="tab-pane fade {% if loop.first %}show active{% endif %}" id="fp{{ loop.index0 }}">
-    {{ _file_result(r, job.id, loop.index0) }}
+    {{ _file_result(r, job.id, loop.index0, dismissals) }}
   </div>
   {% endfor %}
 </div>
 {% else %}
-  {% for r in job.results %}{{ _file_result(r, job.id, loop.index0) }}{% endfor %}
+  {% for r in job.results %}{{ _file_result(r, job.id, loop.index0, dismissals) }}{% endfor %}
 {% endif %}
 {% endmacro %}
 
@@ -150,7 +164,7 @@
 {% endmacro %}
 
 
-{% macro _file_result(r, job_id, idx) %}
+{% macro _file_result(r, job_id, idx, dismissals) %}
 <div class="row g-4">
 
   <!-- Artwork image -->
@@ -192,11 +206,11 @@
       {% endif %}
     </div>
 
-    {{ _check_card('1','GTIN / Barcode',         'bi-upc-scan',           r.checks.gtin,     idx) }}
-    {{ _check_card('2','Front Call-Out vs NFP',  'bi-clipboard2-pulse',   r.checks.nfp,      idx) }}
-    {{ _check_card('3','Eyemark Contrast',        'bi-eye',                r.checks.eyemark,  idx) }}
-    {{ _check_card('4','Spelling / Brand Name',  'bi-spellcheck',         r.checks.spelling, idx) }}
-    {{ _check_card('5','FDA Audit Risk',          'bi-shield-exclamation', r.checks.fda,      idx, always_open=true) }}
+    {{ _check_card('1','GTIN / Barcode',        'bi-upc-scan',           r.checks.gtin,     idx, r.filename, 'gtin',     dismissals) }}
+    {{ _check_card('2','Front Call-Out vs NFP', 'bi-clipboard2-pulse',   r.checks.nfp,      idx, r.filename, 'nfp',      dismissals) }}
+    {{ _check_card('3','Eyemark Contrast',       'bi-eye',                r.checks.eyemark,  idx, r.filename, 'eyemark',  dismissals) }}
+    {{ _check_card('4','Spelling / Brand Name', 'bi-spellcheck',         r.checks.spelling, idx, r.filename, 'spelling', dismissals) }}
+    {{ _check_card('5','FDA Audit Risk',         'bi-shield-exclamation', r.checks.fda,      idx, r.filename, 'fda',      dismissals, always_open=true) }}
 
     <!-- OCR text -->
     {% if r.ocr_preview %}
@@ -218,7 +232,7 @@
 {% endmacro %}
 
 
-{% macro _check_card(num, title, icon, check, idx, always_open=false) %}
+{% macro _check_card(num, title, icon, check, idx, filename, check_key, dismissals, always_open=false) %}
 {% if not check %}{% set check = {} %}{% endif %}
 {% set issues = check.get('issues', []) %}
 {% set notes  = check.get('notes',  []) %}
@@ -247,24 +261,24 @@
   <div class="collapse {% if crits or warns or always_open %}show{% endif %}" id="{{ card_id }}">
     <div class="card-body py-2 small">
 
-      {% for i in crits %}
-      <div class="d-flex gap-2 mb-2 p-2 rounded sev-critical">
-        <i class="bi bi-x-circle-fill text-danger flex-shrink-0 mt-1"></i>
-        <span>{{ i.message }}</span>
-      </div>
-      {% endfor %}
-
-      {% for i in warns %}
-      <div class="d-flex gap-2 mb-2 p-2 rounded sev-warning">
-        <i class="bi bi-exclamation-triangle-fill text-warning flex-shrink-0 mt-1"></i>
-        <span>{{ i.message }}</span>
-      </div>
-      {% endfor %}
-
-      {% for i in infos %}
-      <div class="d-flex gap-2 mb-2 p-2 rounded sev-info">
-        <i class="bi bi-info-circle-fill text-info flex-shrink-0 mt-1"></i>
-        <span>{{ i.message }}</span>
+      {% for issue in issues %}
+      {% set iidx = loop.index0 %}
+      {% set dkey = filename ~ '|' ~ check_key ~ '|' ~ iidx %}
+      {% set dismissed = dismissals.get(dkey, false) %}
+      <div class="d-flex gap-2 mb-2 p-2 rounded sev-{{ issue.severity }} issue-row{{ ' dismissed' if dismissed }}"
+           data-filename="{{ filename }}" data-check="{{ check_key }}" data-idx="{{ iidx }}">
+        <i class="bi
+          {% if issue.severity == 'critical' %}bi-x-circle-fill text-danger
+          {% elif issue.severity == 'warning' %}bi-exclamation-triangle-fill text-warning
+          {% else %}bi-info-circle-fill text-info{% endif %}
+          flex-shrink-0 mt-1"></i>
+        <span class="flex-grow-1">{{ issue.message }}</span>
+        <button class="btn btn-sm btn-outline-secondary py-0 px-2 flex-shrink-0 dismiss-btn"
+                title="{{ 'Restore this flag' if dismissed else 'Mark as reviewed — excluded from report' }}"
+                onclick="toggleDismiss(this, event)">
+          <i class="bi {{ 'bi-arrow-counterclockwise' if dismissed else 'bi-check2' }}"></i>
+          {{ 'Restore' if dismissed else 'Dismiss' }}
+        </button>
       </div>
       {% endfor %}
 
@@ -304,22 +318,60 @@
 
 {% block scripts %}
 <script>
-/* ── JS rendering (used when page loads during processing) ── */
-
-const JOB_ID       = "{{ job_id }}";
-const INIT_STATUS  = "{{ job.status }}";
+const JOB_ID      = "{{ job_id }}";
+const INIT_STATUS = "{{ job.status }}";
 
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
-function issueRows(issues) {
+/* ── Dismiss ── */
+async function toggleDismiss(btn, event) {
+  event.stopPropagation();
+  const row      = btn.closest('.issue-row');
+  const filename = row.dataset.filename;
+  const check    = row.dataset.check;
+  const idx      = parseInt(row.dataset.idx);
+  const isDismissed = row.classList.contains('dismissed');
+
+  try {
+    const resp = await fetch(`/api/dismiss/${JOB_ID}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename, check, index: idx, dismissed: !isDismissed }),
+    });
+    if (!resp.ok) return;
+
+    if (!isDismissed) {
+      row.classList.add('dismissed');
+      btn.innerHTML = '<i class="bi bi-arrow-counterclockwise"></i> Restore';
+      btn.title = 'Restore this flag';
+    } else {
+      row.classList.remove('dismissed');
+      btn.innerHTML = '<i class="bi bi-check2"></i> Dismiss';
+      btn.title = 'Mark as reviewed — excluded from report';
+    }
+  } catch (e) { console.error('Dismiss failed', e); }
+}
+
+/* ── JS rendering (polling path) ── */
+
+function issueRows(issues, filename, checkKey) {
   if (!issues || !issues.length)
     return '<span class="text-success"><i class="bi bi-check-circle me-1"></i>No issues detected.</span>';
-  return issues.map(i => {
-    const c = i.severity === 'critical' ? 'danger' : i.severity === 'warning' ? 'warning' : 'info';
-    const ic = i.severity === 'critical' ? 'x-circle-fill' : i.severity === 'warning' ? 'exclamation-triangle-fill' : 'info-circle-fill';
-    return `<div class="d-flex gap-2 mb-2 p-2 rounded sev-${i.severity}">
-      <i class="bi bi-${ic} text-${c} flex-shrink-0 mt-1"></i>
-      <span>${esc(i.message)}</span></div>`;
+  return issues.map((issue, i) => {
+    const sev = issue.severity;
+    const ic  = sev === 'critical' ? 'x-circle-fill text-danger'
+              : sev === 'warning'  ? 'exclamation-triangle-fill text-warning'
+              :                      'info-circle-fill text-info';
+    return `<div class="d-flex gap-2 mb-2 p-2 rounded sev-${sev} issue-row"
+      data-filename="${esc(filename)}" data-check="${esc(checkKey)}" data-idx="${i}">
+      <i class="bi bi-${ic} flex-shrink-0 mt-1"></i>
+      <span class="flex-grow-1">${esc(issue.message)}</span>
+      <button class="btn btn-sm btn-outline-secondary py-0 px-2 flex-shrink-0 dismiss-btn"
+              title="Mark as reviewed — excluded from report"
+              onclick="toggleDismiss(this, event)">
+        <i class="bi bi-check2"></i> Dismiss
+      </button>
+    </div>`;
   }).join('');
 }
 
@@ -330,7 +382,7 @@ function noteRows(notes) {
   ).join('')}</div>`;
 }
 
-function checkCard(num, title, icon, check, uid, alwaysOpen) {
+function checkCard(num, title, icon, check, uid, filename, checkKey, alwaysOpen) {
   check = check || {};
   const issues = check.issues || [];
   const notes  = check.notes  || [];
@@ -366,7 +418,7 @@ function checkCard(num, title, icon, check, uid, alwaysOpen) {
     </div>
     <div class="collapse ${crits.length || warns.length || alwaysOpen ? 'show' : ''}" id="${id}">
       <div class="card-body py-2 small">
-        ${issueRows(issues)}${noteRows(notes)}${extras}
+        ${issueRows(issues, filename, checkKey)}${noteRows(notes)}${extras}
       </div>
     </div>
   </div>`;
@@ -404,11 +456,11 @@ function fileResult(r, jobId, idx) {
         <span class="fw-bold text-truncate">${esc(r.filename)}</span>
         ${sevBadge(r)}
       </div>
-      ${checkCard('1','GTIN / Barcode',        'bi-upc-scan',           checks.gtin,     uid, false)}
-      ${checkCard('2','Front Call-Out vs NFP', 'bi-clipboard2-pulse',   checks.nfp,      uid, false)}
-      ${checkCard('3','Eyemark Contrast',       'bi-eye',                checks.eyemark,  uid, false)}
-      ${checkCard('4','Spelling / Brand Name', 'bi-spellcheck',         checks.spelling, uid, false)}
-      ${checkCard('5','FDA Audit Risk',         'bi-shield-exclamation', checks.fda,      uid, true)}
+      ${checkCard('1','GTIN / Barcode',        'bi-upc-scan',           checks.gtin,     uid, r.filename, 'gtin',     false)}
+      ${checkCard('2','Front Call-Out vs NFP', 'bi-clipboard2-pulse',   checks.nfp,      uid, r.filename, 'nfp',      false)}
+      ${checkCard('3','Eyemark Contrast',       'bi-eye',                checks.eyemark,  uid, r.filename, 'eyemark',  false)}
+      ${checkCard('4','Spelling / Brand Name', 'bi-spellcheck',         checks.spelling, uid, r.filename, 'spelling', false)}
+      ${checkCard('5','FDA Audit Risk',         'bi-shield-exclamation', checks.fda,      uid, r.filename, 'fda',      true)}
       ${r.ocr_preview ? `<div class="mt-2">
         <button class="btn btn-outline-secondary btn-sm" type="button"
                 data-bs-toggle="collapse" data-bs-target="#jsocr${idx}">
@@ -454,10 +506,20 @@ function fdaAlert(s) {
 
 function buildReport(job) {
   const results = job.results || [];
-  const hdr = `<div class="d-flex align-items-center gap-3 mb-4 flex-wrap">
+  const hdr = `<div class="d-flex align-items-center gap-2 mb-4 flex-wrap">
     <div><h4 class="mb-0 fw-bold"><i class="bi bi-file-earmark-check text-primary me-2"></i>Proof Report</h4>
     <div class="text-muted small">Job ${job.id} &bull; ${job.created.substring(0,19).replace('T',' ')}</div></div>
-    <a href="/" class="btn btn-outline-secondary btn-sm ms-auto"><i class="bi bi-arrow-left me-1"></i>New Proof</a>
+    <div class="ms-auto d-flex gap-2 flex-wrap">
+      <a href="/viewer/${job.id}" class="btn btn-outline-info btn-sm"><i class="bi bi-zoom-in me-1"></i>Manual Review</a>
+      <a href="/summary/${job.id}" class="btn btn-outline-primary btn-sm"><i class="bi bi-clipboard2-check me-1"></i>Full Summary</a>
+      <a href="/report/${job.id}" class="btn btn-success btn-sm"><i class="bi bi-download me-1"></i>Download Report</a>
+      <a href="/" class="btn btn-outline-secondary btn-sm"><i class="bi bi-arrow-left me-1"></i>New Proof</a>
+    </div>
+  </div>`;
+
+  const dismissTip = `<div class="alert alert-light border small d-flex align-items-center gap-2 mb-3 py-2">
+    <i class="bi bi-check2-square text-secondary fs-5"></i>
+    <span>Click <strong>Dismiss</strong> on any flag you've manually verified and confirmed is not an issue. Dismissed flags are excluded from the downloaded report.</span>
   </div>`;
 
   if (results.length > 1) {
@@ -469,10 +531,10 @@ function buildReport(job) {
     const panes = results.map((r, i) =>
       `<div class="tab-pane fade ${i===0?'show active':''}" id="jsfp${i}">${fileResult(r,job.id,i)}</div>`
     ).join('');
-    return hdr + summaryCards(job.summary) + fdaAlert(job.summary) +
+    return hdr + summaryCards(job.summary) + fdaAlert(job.summary) + dismissTip +
       `<ul class="nav nav-tabs mb-3">${tabs}</ul><div class="tab-content">${panes}</div>`;
   }
-  return hdr + summaryCards(job.summary) + fdaAlert(job.summary) +
+  return hdr + summaryCards(job.summary) + fdaAlert(job.summary) + dismissTip +
     (results[0] ? fileResult(results[0], job.id, 0) : '');
 }
 

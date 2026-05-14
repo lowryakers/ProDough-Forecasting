@@ -1,0 +1,182 @@
+{% extends 'base.html' %}
+{% block title %}Manual Review — {{ job_id }} — ProDough Proof{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
+  <div>
+    <h4 class="mb-0 fw-bold"><i class="bi bi-zoom-in text-primary me-2"></i>Manual Review</h4>
+    <div class="text-muted small">Job {{ job_id }} &bull; {{ job.results | length }} file{{ 's' if job.results | length != 1 }}</div>
+  </div>
+  <div class="ms-auto d-flex gap-2">
+    <a href="{{ url_for('result', job_id=job_id) }}" class="btn btn-outline-secondary btn-sm">
+      <i class="bi bi-arrow-left me-1"></i>Back to Report
+    </a>
+    {% if job.status == 'done' %}
+    <a href="{{ url_for('download_report', job_id=job_id) }}" class="btn btn-success btn-sm">
+      <i class="bi bi-download me-1"></i>Download Report
+    </a>
+    {% endif %}
+  </div>
+</div>
+
+{% if job.status != 'done' %}
+<div class="alert alert-info">
+  <i class="bi bi-hourglass-split me-2"></i>Job is still processing — come back when it's complete to review artwork.
+</div>
+{% elif not job.results %}
+<div class="alert alert-secondary">No results found for this job.</div>
+{% else %}
+
+<div class="row g-3" style="min-height:80vh">
+
+  <!-- Left sidebar: file list -->
+  <div class="col-lg-3 col-md-4">
+    <div class="card shadow-sm sticky-top" style="top:16px">
+      <div class="card-header bg-light py-2 small fw-semibold">
+        <i class="bi bi-files me-1"></i>Files ({{ job.results | length }})
+      </div>
+      <div class="list-group list-group-flush" style="max-height:80vh;overflow-y:auto">
+        {% for r in job.results %}
+        {% set items = verify_map.get(r.filename, []) %}
+        <button class="list-group-item list-group-item-action px-3 py-2 text-start file-btn
+                       {% if loop.first %}active{% endif %}"
+                id="fbtn{{ loop.index0 }}"
+                onclick="selectFile({{ loop.index0 }})">
+          <div class="small fw-semibold text-truncate" title="{{ r.filename }}">
+            {% if r.severity == 'critical' %}<i class="bi bi-x-circle-fill text-danger me-1"></i>
+            {% elif r.severity == 'warning' %}<i class="bi bi-exclamation-triangle-fill text-warning me-1"></i>
+            {% elif r.severity == 'clean' %}<i class="bi bi-check-circle-fill text-success me-1"></i>
+            {% else %}<i class="bi bi-dash-circle text-secondary me-1"></i>
+            {% endif %}
+            {{ r.filename | truncate(32, true, '…') }}
+          </div>
+          {% if items | length > 0 %}
+          <span class="badge bg-warning text-dark mt-1">{{ items | length }} verify item{{ 's' if items | length != 1 }}</span>
+          {% else %}
+          <span class="badge bg-success mt-1 opacity-75">No verify items</span>
+          {% endif %}
+        </button>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Main: image viewer + verify flags -->
+  <div class="col-lg-9 col-md-8">
+    {% for r in job.results %}
+    {% set items = verify_map.get(r.filename, []) %}
+    <div class="file-panel {% if not loop.first %}d-none{% endif %}" id="panel{{ loop.index0 }}">
+
+      <!-- Image viewer -->
+      <div class="card shadow-sm mb-3">
+        <div class="card-header bg-light py-2 d-flex align-items-center gap-2 flex-wrap">
+          <span class="small fw-semibold text-truncate flex-grow-1">{{ r.filename }}</span>
+          <div class="d-flex gap-1 ms-auto flex-shrink-0">
+            <button class="btn btn-sm btn-outline-secondary" onclick="zoom({{ loop.index0 }}, -0.25)"
+                    title="Zoom out">
+              <i class="bi bi-zoom-out"></i>
+            </button>
+            <button class="btn btn-sm btn-outline-secondary" onclick="zoom({{ loop.index0 }}, 0)"
+                    title="Reset zoom">
+              <i class="bi bi-aspect-ratio"></i>
+            </button>
+            <button class="btn btn-sm btn-outline-secondary" onclick="zoom({{ loop.index0 }}, 0.25)"
+                    title="Zoom in">
+              <i class="bi bi-zoom-in"></i>
+            </button>
+            <span class="badge bg-light text-dark border small ms-1 align-self-center"
+                  id="zoomLabel{{ loop.index0 }}">100%</span>
+          </div>
+        </div>
+        <div class="card-body p-2 bg-dark bg-opacity-10 text-center"
+             style="overflow:auto;max-height:65vh;cursor:grab"
+             id="imgBox{{ loop.index0 }}">
+          {% if r.img_path %}
+          <div id="imgWrap{{ loop.index0 }}"
+               style="display:inline-block;transform-origin:top center;transition:transform .15s">
+            <img src="{{ url_for('serve_image', job_id=job_id, filename=r.img_path | basename_filter) }}"
+                 class="rounded shadow"
+                 style="max-width:100%;display:block"
+                 alt="{{ r.filename }}">
+          </div>
+          {% else %}
+          <div class="text-muted py-5">
+            <i class="bi bi-image fs-1 d-block mb-2"></i>Image not available
+          </div>
+          {% endif %}
+        </div>
+      </div>
+
+      <!-- Verify items for this file -->
+      {% if items %}
+      <div class="card shadow-sm border-warning">
+        <div class="card-header bg-warning bg-opacity-10 border-warning py-2 d-flex align-items-center gap-2">
+          <i class="bi bi-search text-warning"></i>
+          <span class="small fw-semibold">Items Requiring Manual Verification ({{ items | length }})</span>
+        </div>
+        <div class="card-body py-2 small">
+          {% for item in items %}
+          <div class="d-flex gap-2 mb-2 p-2 rounded
+            {% if item.severity == 'critical' %}bg-danger bg-opacity-10
+            {% elif item.severity == 'warning' %}bg-warning bg-opacity-10
+            {% else %}bg-info bg-opacity-10{% endif %}">
+            <i class="bi
+              {% if item.severity == 'critical' %}bi-x-circle-fill text-danger
+              {% elif item.severity == 'warning' %}bi-exclamation-triangle-fill text-warning
+              {% else %}bi-info-circle-fill text-info{% endif %}
+              flex-shrink-0 mt-1"></i>
+            <div>
+              <div class="fw-semibold text-muted mb-1" style="font-size:.75rem">
+                {{ item.check_label }}
+              </div>
+              {{ item.message }}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% else %}
+      <div class="alert alert-success d-flex align-items-center gap-2">
+        <i class="bi bi-check-circle-fill fs-5"></i>
+        <span>No manual verification items for this file. All flags are either clear or handled by the automated checks.</span>
+      </div>
+      {% endif %}
+
+    </div>
+    {% endfor %}
+  </div>
+
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+const scales = {};
+
+function selectFile(idx) {
+  document.querySelectorAll('.file-panel').forEach(p => p.classList.add('d-none'));
+  document.querySelectorAll('.file-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('panel' + idx).classList.remove('d-none');
+  document.getElementById('fbtn' + idx).classList.add('active');
+}
+
+function zoom(idx, delta) {
+  if (scales[idx] === undefined) scales[idx] = 1.0;
+  scales[idx] = delta === 0 ? 1.0 : Math.max(0.25, Math.min(5, scales[idx] + delta));
+  const wrap  = document.getElementById('imgWrap' + idx);
+  const label = document.getElementById('zoomLabel' + idx);
+  if (wrap)  wrap.style.transform = `scale(${scales[idx]})`;
+  if (label) label.textContent = Math.round(scales[idx] * 100) + '%';
+}
+
+/* Mouse-wheel zoom on the image box */
+document.querySelectorAll('[id^="imgBox"]').forEach(box => {
+  box.addEventListener('wheel', e => {
+    e.preventDefault();
+    const idx = box.id.replace('imgBox', '');
+    zoom(parseInt(idx), e.deltaY < 0 ? 0.15 : -0.15);
+  }, { passive: false });
+});
+</script>
+{% endblock %}

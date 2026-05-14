@@ -1,0 +1,113 @@
+{% extends 'base.html' %}
+{% block title %}GTIN Master List — ProDough Proof{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center gap-3 mb-4 flex-wrap">
+  <div>
+    <h4 class="mb-0 fw-bold"><i class="bi bi-upc-scan text-primary me-2"></i>Master GTIN List</h4>
+    {% if store %}
+    <div class="text-muted small">
+      {{ store.row_count }} SKUs &bull; uploaded {{ store.uploaded_at[:10] }} from <em>{{ store.filename }}</em>
+      {% if store.error_count > 0 %}
+      &bull; <span class="text-warning fw-semibold">{{ store.error_count }} with issues</span>
+      {% else %}
+      &bull; <span class="text-success fw-semibold">All GTINs valid</span>
+      {% endif %}
+    </div>
+    {% endif %}
+  </div>
+  <div class="ms-auto">
+    <a href="{{ url_for('index') }}" class="btn btn-outline-primary btn-sm">
+      <i class="bi bi-arrow-up-circle me-1"></i>Upload New List
+    </a>
+  </div>
+</div>
+
+{% if not store %}
+<div class="card shadow-sm">
+  <div class="card-body text-center py-5 text-muted">
+    <i class="bi bi-upc fs-1 d-block mb-3 opacity-50"></i>
+    <h5>No GTIN list on file</h5>
+    <p class="mb-3">Upload the Master ProDough SKU &amp; GTIN List when running your next proof.</p>
+    <a href="{{ url_for('index') }}" class="btn btn-primary">
+      <i class="bi bi-upload me-2"></i>Go to Upload
+    </a>
+  </div>
+</div>
+
+{% else %}
+
+{% if store.error_count > 0 %}
+<div class="alert alert-warning d-flex align-items-center gap-2 mb-3">
+  <i class="bi bi-exclamation-triangle-fill fs-5"></i>
+  <div>
+    <strong>{{ store.error_count }} GTIN(s) have issues</strong> — highlighted below.
+    Fix them in your master spreadsheet and re-upload on the next proof run.
+  </div>
+</div>
+{% endif %}
+
+<div class="card shadow-sm">
+  <div class="card-header bg-light py-2 d-flex align-items-center gap-3 flex-wrap">
+    <span class="fw-semibold small">
+      <i class="bi bi-table me-1"></i>{{ store.row_count }} SKUs
+    </span>
+    <input type="text" id="gtinSearch" class="form-control form-control-sm ms-auto"
+           style="max-width:280px" placeholder="Search GTIN, SKU, or flavor…"
+           oninput="filterTable()">
+  </div>
+  <div class="table-responsive" style="max-height:72vh;overflow-y:auto">
+    <table class="table table-sm table-hover align-middle mb-0 small" id="gtinTable">
+      <thead class="table-light sticky-top">
+        <tr>
+          <th class="ps-3" style="width:48px">#</th>
+          <th style="width:160px">GTIN / UPC</th>
+          <th style="width:140px">SKU</th>
+          <th>Flavor / Product Name</th>
+          <th class="pe-3 text-center" style="width:140px">Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in store.rows %}
+        {% set valid = row.get('_valid', true) %}
+        <tr class="{{ 'table-warning' if not valid }}">
+          <td class="ps-3 text-muted">{{ loop.index }}</td>
+          <td>
+            <code class="{{ 'text-danger fw-bold' if not valid else 'text-dark' }}">
+              {{ row.gtin or '—' }}
+            </code>
+          </td>
+          <td class="text-muted">{{ row.sku or '—' }}</td>
+          <td>{{ row.flavor or '—' }}</td>
+          <td class="pe-3 text-center">
+            {% if not valid %}
+              <span class="badge bg-warning text-dark">{{ row.get('_error', 'Invalid') }}</span>
+            {% else %}
+              <span class="badge bg-success">Valid</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="text-muted small mt-2 ps-1">
+  <i class="bi bi-info-circle me-1"></i>
+  GTINs should be 12-digit numeric UPC codes. Upload a fresh copy of the master list with each proof run to keep barcode cross-checks current.
+</div>
+
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+function filterTable() {
+  const q = document.getElementById('gtinSearch').value.toLowerCase();
+  document.querySelectorAll('#gtinTable tbody tr').forEach(row => {
+    row.style.display = row.textContent.toLowerCase().includes(q) ? '' : 'none';
+  });
+}
+</script>
+{% endblock %}
