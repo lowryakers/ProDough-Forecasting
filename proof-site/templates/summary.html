@@ -2,14 +2,42 @@
 {% block title %}Full Summary — {{ job_id }} — ProDough Proof{% endblock %}
 
 {% block content %}
-{% set s = job.summary %}
-{% set results = job.results %}
+{% set results    = job.results %}
+{% set dismissals = job.get('dismissals', {}) %}
+
+{# ── Pre-compute filtered issue lists (respects dismissals) ── #}
+{% set all_crits = [] %}
+{% set all_warns = [] %}
+{% for r in results %}
+  {% if not r.error %}
+    {% for check_name, check in r.checks.items() %}
+      {% for issue in check.get('issues', []) %}
+        {% set dkey = r.filename ~ '|' ~ check_name ~ '|' ~ loop.index0 %}
+        {% if not dismissals.get(dkey, false) %}
+          {% if issue.severity == 'critical' %}
+            {% set _ = all_crits.append({'file': r.filename, 'check': check_name, 'message': issue.message}) %}
+          {% elif issue.severity == 'warning' %}
+            {% set _ = all_warns.append({'file': r.filename, 'check': check_name, 'message': issue.message}) %}
+          {% endif %}
+        {% endif %}
+      {% endfor %}
+    {% endfor %}
+  {% endif %}
+{% endfor %}
+
+{% set dismissed_count = dismissals | length %}
+{% set clean_files = results | selectattr('severity', 'in', ['clean', 'info']) | list %}
 
 <!-- Header -->
 <div class="d-flex align-items-center gap-3 mb-4 flex-wrap no-print">
   <div>
     <h4 class="mb-0 fw-bold"><i class="bi bi-clipboard2-check text-primary me-2"></i>Full Proof Summary</h4>
-    <div class="text-muted small">Job {{ job_id }} &bull; {{ job.created[:19].replace('T',' ') }} &bull; {{ s.total_files }} file{{ 's' if s.total_files != 1 }}</div>
+    <div class="text-muted small">
+      Job {{ job_id }} &bull; {{ job.created[:19].replace('T',' ') }} &bull; {{ results | length }} file{{ 's' if results | length != 1 }}
+      {% if dismissed_count > 0 %}
+      &bull; <span class="text-muted">{{ dismissed_count }} flag{{ 's' if dismissed_count != 1 }} dismissed</span>
+      {% endif %}
+    </div>
   </div>
   <div class="ms-auto d-flex gap-2 flex-wrap">
     <a href="{{ url_for('result', job_id=job_id) }}" class="btn btn-outline-secondary btn-sm">
@@ -30,49 +58,49 @@
   </div>
 </div>
 
-<!-- Print header (hidden on screen) -->
+<!-- Print header -->
 <div class="print-only mb-4">
   <h3 class="fw-bold mb-1">ProDough Artwork Proof — Full Summary</h3>
   <div class="text-muted small">Job {{ job_id }} &bull; {{ job.created[:19].replace('T',' ') }}</div>
 </div>
 
-<!-- Summary scorecard -->
+<!-- Scorecard (uses filtered counts) -->
 <div class="row g-3 mb-4">
   <div class="col-6 col-sm-3">
     <div class="card border-0 shadow-sm text-center h-100">
       <div class="card-body py-3">
-        <div class="fs-2 fw-bold">{{ s.total_files }}</div>
+        <div class="fs-2 fw-bold">{{ results | length }}</div>
         <div class="text-muted small">Files Proofed</div>
       </div>
     </div>
   </div>
   <div class="col-6 col-sm-3">
-    <div class="card border-0 shadow-sm text-center h-100 {{ 'bg-danger text-white' if s.total_critical_issues else 'bg-success text-white' }}">
+    <div class="card border-0 shadow-sm text-center h-100 {{ 'bg-danger text-white' if all_crits else 'bg-success text-white' }}">
       <div class="card-body py-3">
-        <div class="fs-2 fw-bold">{{ s.total_critical_issues }}</div>
+        <div class="fs-2 fw-bold">{{ all_crits | length }}</div>
         <div class="small">Critical Issues</div>
       </div>
     </div>
   </div>
   <div class="col-6 col-sm-3">
-    <div class="card border-0 shadow-sm text-center h-100 {{ 'bg-warning' if s.total_warning_issues else 'bg-light' }}">
+    <div class="card border-0 shadow-sm text-center h-100 {{ 'bg-warning' if all_warns else 'bg-light' }}">
       <div class="card-body py-3">
-        <div class="fs-2 fw-bold">{{ s.total_warning_issues }}</div>
+        <div class="fs-2 fw-bold">{{ all_warns | length }}</div>
         <div class="text-dark small">Warnings</div>
       </div>
     </div>
   </div>
   <div class="col-6 col-sm-3">
-    <div class="card border-0 shadow-sm text-center h-100 {{ 'bg-success text-white' if s.severity_counts.clean else 'bg-light' }}">
+    <div class="card border-0 shadow-sm text-center h-100 {{ 'bg-secondary text-white' if dismissed_count else 'bg-light' }}">
       <div class="card-body py-3">
-        <div class="fs-2 fw-bold">{{ s.severity_counts.clean }}</div>
-        <div class="small {{ 'text-white' if s.severity_counts.clean else 'text-muted' }}">Clean Files</div>
+        <div class="fs-2 fw-bold">{{ dismissed_count }}</div>
+        <div class="small {{ 'text-white' if dismissed_count else 'text-muted' }}">Dismissed</div>
       </div>
     </div>
   </div>
 </div>
 
-<!-- File status overview table -->
+<!-- File status overview table (dismiss-aware per-check icons) -->
 <div class="card shadow-sm mb-4">
   <div class="card-header fw-semibold bg-light py-2">
     <i class="bi bi-table me-1"></i>File Status Overview
@@ -94,22 +122,29 @@
         {% for r in results %}
         {% if not r.error %}
         <tr>
-          <td class="ps-3 fw-semibold">
-            <a href="{{ url_for('result', job_id=job_id) }}#" class="text-decoration-none text-dark no-print">{{ r.filename }}</a>
-            <span class="print-only">{{ r.filename }}</span>
-          </td>
-          {{ _check_cell(r.checks.gtin) }}
-          {{ _check_cell(r.checks.nfp) }}
-          {{ _check_cell(r.checks.eyemark) }}
-          {{ _check_cell(r.checks.spelling) }}
-          {{ _check_cell(r.checks.fda) }}
+          <td class="ps-3 fw-semibold">{{ r.filename }}</td>
+          {{ _check_cell(r.checks.gtin,     r.filename, 'gtin',     dismissals) }}
+          {{ _check_cell(r.checks.nfp,      r.filename, 'nfp',      dismissals) }}
+          {{ _check_cell(r.checks.eyemark,  r.filename, 'eyemark',  dismissals) }}
+          {{ _check_cell(r.checks.spelling, r.filename, 'spelling', dismissals) }}
+          {{ _check_cell(r.checks.fda,      r.filename, 'fda',      dismissals) }}
           <td class="text-center pe-3">
-            {% if r.severity == 'critical' %}
-              <span class="badge bg-danger">{{ r.critical_count }} critical</span>
-            {% elif r.severity == 'warning' %}
-              <span class="badge bg-warning text-dark">{{ r.warning_count }} warnings</span>
-            {% elif r.severity == 'info' %}
-              <span class="badge bg-info text-dark">info</span>
+            {# Recompute per-file severity after dismissals #}
+            {% set file_crits = [] %}
+            {% set file_warns = [] %}
+            {% for check_name, check in r.checks.items() %}
+              {% for issue in check.get('issues', []) %}
+                {% set dkey = r.filename ~ '|' ~ check_name ~ '|' ~ loop.index0 %}
+                {% if not dismissals.get(dkey, false) %}
+                  {% if issue.severity == 'critical' %}{% set _ = file_crits.append(1) %}{% endif %}
+                  {% if issue.severity == 'warning'  %}{% set _ = file_warns.append(1) %}{% endif %}
+                {% endif %}
+              {% endfor %}
+            {% endfor %}
+            {% if file_crits %}
+              <span class="badge bg-danger">{{ file_crits | length }} critical</span>
+            {% elif file_warns %}
+              <span class="badge bg-warning text-dark">{{ file_warns | length }} warnings</span>
             {% else %}
               <span class="badge bg-success">Clean</span>
             {% endif %}
@@ -117,7 +152,7 @@
         </tr>
         {% else %}
         <tr class="table-secondary">
-          <td class="ps-3 text-muted fst-italic" colspan="7">{{ r.filename }} — processing error: {{ r.error }}</td>
+          <td class="ps-3 text-muted fst-italic" colspan="7">{{ r.filename }} — error: {{ r.error }}</td>
         </tr>
         {% endif %}
         {% endfor %}
@@ -126,20 +161,7 @@
   </div>
 </div>
 
-<!-- Critical issues (all files) -->
-{% set all_crits = [] %}
-{% for r in results %}
-  {% if not r.error %}
-    {% for check_name, check in r.checks.items() %}
-      {% for issue in check.get('issues', []) %}
-        {% if issue.severity == 'critical' %}
-          {% set _ = all_crits.append({'file': r.filename, 'check': check_name, 'message': issue.message}) %}
-        {% endif %}
-      {% endfor %}
-    {% endfor %}
-  {% endif %}
-{% endfor %}
-
+<!-- Critical issues (filtered) -->
 {% if all_crits %}
 <div class="card shadow-sm mb-4 border-danger">
   <div class="card-header fw-semibold bg-danger bg-opacity-10 text-danger py-2">
@@ -169,20 +191,7 @@
 </div>
 {% endif %}
 
-<!-- Warnings (all files) -->
-{% set all_warns = [] %}
-{% for r in results %}
-  {% if not r.error %}
-    {% for check_name, check in r.checks.items() %}
-      {% for issue in check.get('issues', []) %}
-        {% if issue.severity == 'warning' %}
-          {% set _ = all_warns.append({'file': r.filename, 'check': check_name, 'message': issue.message}) %}
-        {% endif %}
-      {% endfor %}
-    {% endfor %}
-  {% endif %}
-{% endfor %}
-
+<!-- Warnings (filtered) -->
 {% if all_warns %}
 <div class="card shadow-sm mb-4 border-warning">
   <div class="card-header fw-semibold bg-warning bg-opacity-10 py-2">
@@ -212,32 +221,48 @@
 </div>
 {% endif %}
 
-<!-- FDA section (all files) -->
+{% if not all_crits and not all_warns %}
+<div class="alert alert-success d-flex align-items-center gap-2 mb-4">
+  <i class="bi bi-check-circle-fill fs-4"></i>
+  <span><strong>No open issues.</strong>
+  {% if dismissed_count > 0 %}{{ dismissed_count }} flag{{ 's' if dismissed_count != 1 }} were reviewed and dismissed.{% endif %}
+  All files are ready to proceed.</span>
+</div>
+{% endif %}
+
+<!-- FDA section (active issues only) -->
 <div class="card shadow-sm mb-4">
   <div class="card-header fw-semibold bg-light py-2">
     <i class="bi bi-shield-exclamation me-1 text-danger"></i>FDA Audit Risk — All Files
   </div>
   <div class="card-body p-0">
-    {% set has_fda_issues = namespace(value=false) %}
+    {% set has_fda = namespace(value=false) %}
     {% for r in results %}
       {% if not r.error and r.checks.fda %}
         {% set fda = r.checks.fda %}
-        {% set fda_issues = fda.get('issues', []) %}
-        {% set fda_notes  = fda.get('notes',  []) %}
-        {% if fda_issues or fda_notes %}
-          {% set has_fda_issues.value = true %}
+        {% set fda_notes = fda.get('notes', []) %}
+        {# Only active (non-dismissed) fda issues #}
+        {% set active_fda_issues = [] %}
+        {% for issue in fda.get('issues', []) %}
+          {% set dkey = r.filename ~ '|fda|' ~ loop.index0 %}
+          {% if not dismissals.get(dkey, false) %}
+            {% set _ = active_fda_issues.append(issue) %}
+          {% endif %}
+        {% endfor %}
+        {% if active_fda_issues or fda_notes %}
+          {% set has_fda.value = true %}
           <div class="border-bottom px-3 py-2">
             <div class="fw-semibold small mb-1">
-              {% if r.severity == 'critical' %}
+              {% if active_fda_issues | selectattr('severity','equalto','critical') | list %}
                 <i class="bi bi-x-circle-fill text-danger me-1"></i>
-              {% elif r.severity == 'warning' %}
+              {% elif active_fda_issues %}
                 <i class="bi bi-exclamation-triangle-fill text-warning me-1"></i>
               {% else %}
                 <i class="bi bi-check-circle-fill text-success me-1"></i>
               {% endif %}
               {{ r.filename }}
             </div>
-            {% for issue in fda_issues %}
+            {% for issue in active_fda_issues %}
               <div class="d-flex gap-2 mb-1 small p-2 rounded
                 {% if issue.severity == 'critical' %}bg-danger bg-opacity-10
                 {% elif issue.severity == 'warning' %}bg-warning bg-opacity-10
@@ -261,35 +286,18 @@
         {% endif %}
       {% endif %}
     {% endfor %}
-    {% if not has_fda_issues.value %}
+    {% if not has_fda.value %}
       <div class="p-3 text-muted small text-center">No FDA issues detected across all files.</div>
     {% endif %}
   </div>
 </div>
 
-<!-- Clean files -->
-{% set clean_files = results | selectattr('severity', 'equalto', 'clean') | list %}
-{% if clean_files %}
-<div class="card shadow-sm mb-4 border-success">
-  <div class="card-header fw-semibold bg-success bg-opacity-10 text-success py-2">
-    <i class="bi bi-check-circle-fill me-1"></i>Verified Clean — No Issues Found
-  </div>
-  <div class="card-body py-2 small">
-    {% for r in clean_files %}
-    <div class="d-flex align-items-center gap-2 mb-1">
-      <i class="bi bi-check2 text-success"></i>{{ r.filename }}
-    </div>
-    {% endfor %}
-  </div>
-</div>
-{% endif %}
-
 <!-- Footer note -->
 <div class="alert alert-secondary small mt-2 no-print">
   <i class="bi bi-info-circle me-1"></i>
-  FDA flags are pattern-matched from OCR text. Print-ready PDFs with outlined text have limited OCR accuracy —
-  treat all absence-based warnings (missing NFP, ingredients, allergens, manufacturer info) as manual verification items,
-  not confirmed defects. Always have a regulatory professional review final labels before printing.
+  FDA flags are pattern-matched from OCR text. Print-ready PDFs with outlined text have limited OCR accuracy.
+  Treat all absence-based warnings as manual verification items, not confirmed defects.
+  Always have a regulatory professional review final labels before printing.
 </div>
 <div class="print-only text-muted small mt-4 border-top pt-2">
   Generated {{ job.created[:19].replace('T',' ') }} by ProDough Artwork Proof &bull;
@@ -301,21 +309,28 @@
 
 {# ── Helper macros ── #}
 
-{% macro _check_cell(check) %}
+{% macro _check_cell(check, filename, check_name, dismissals) %}
 {% if not check %}
   <td class="text-center text-muted">—</td>
 {% else %}
   {% set issues = check.get('issues', []) %}
-  {% set crits  = issues | selectattr('severity','equalto','critical') | list %}
-  {% set warns  = issues | selectattr('severity','equalto','warning')  | list %}
   {% set skipped = check.get('skipped', false) %}
+  {% set active_crits = [] %}
+  {% set active_warns = [] %}
+  {% for issue in issues %}
+    {% set dkey = filename ~ '|' ~ check_name ~ '|' ~ loop.index0 %}
+    {% if not dismissals.get(dkey, false) %}
+      {% if issue.severity == 'critical' %}{% set _ = active_crits.append(1) %}{% endif %}
+      {% if issue.severity == 'warning'  %}{% set _ = active_warns.append(1) %}{% endif %}
+    {% endif %}
+  {% endfor %}
   <td class="text-center">
     {% if skipped %}
       <span class="text-muted small" title="Not applicable for this package type">N/A</span>
-    {% elif crits %}
-      <i class="bi bi-x-circle-fill text-danger" title="{{ crits|length }} critical"></i>
-    {% elif warns %}
-      <i class="bi bi-exclamation-triangle-fill text-warning" title="{{ warns|length }} warnings"></i>
+    {% elif active_crits %}
+      <i class="bi bi-x-circle-fill text-danger" title="{{ active_crits|length }} critical"></i>
+    {% elif active_warns %}
+      <i class="bi bi-exclamation-triangle-fill text-warning" title="{{ active_warns|length }} warnings"></i>
     {% elif issues %}
       <i class="bi bi-info-circle-fill text-info"></i>
     {% else %}
@@ -331,8 +346,7 @@
   {% elif key == 'eyemark' %}Eyemark
   {% elif key == 'spelling' %}Spelling
   {% elif key == 'fda' %}FDA
-  {% else %}{{ key }}
-  {% endif %}
+  {% else %}{{ key }}{% endif %}
 {% endmacro %}
 
 

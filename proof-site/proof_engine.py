@@ -23,7 +23,9 @@ try:
 except ImportError:
     PIL_AVAILABLE = False
 
-# ── In-memory job store (single-user local app) ───────────────────────────────
+_UPLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
+
+# ── In-memory job store ───────────────────────────────────────────────────────
 
 _jobs: dict = {}
 _jobs_lock = threading.Lock()
@@ -57,12 +59,6 @@ def list_jobs() -> list:
         return [dict(j) for j in sorted(_jobs.values(), key=lambda x: x['created'], reverse=True)]
 
 
-def _update_job(job_id: str, **kwargs):
-    with _jobs_lock:
-        if job_id in _jobs:
-            _jobs[job_id].update(kwargs)
-
-
 def set_dismissal(job_id: str, filename: str, check_name: str,
                   issue_index: int, dismissed: bool) -> bool:
     with _jobs_lock:
@@ -73,7 +69,14 @@ def set_dismissal(job_id: str, filename: str, check_name: str,
             _jobs[job_id]['dismissals'][key] = True
         else:
             _jobs[job_id]['dismissals'].pop(key, None)
-        return True
+    _save_job_to_disk(job_id)
+    return True
+
+
+def _update_job(job_id: str, **kwargs):
+    with _jobs_lock:
+        if job_id in _jobs:
+            _jobs[job_id].update(kwargs)
 
 
 def start_job(job_id: str, pdf_paths: list, gtin_rows: list, work_dir: str):
@@ -83,6 +86,43 @@ def start_job(job_id: str, pdf_paths: list, gtin_rows: list, work_dir: str):
         daemon=True,
     )
     t.start()
+
+
+# ── Disk persistence ──────────────────────────────────────────────────────────
+
+def _save_job_to_disk(job_id: str):
+    with _jobs_lock:
+        if job_id not in _jobs:
+            return
+        job = dict(_jobs[job_id])
+    job_file = os.path.join(_UPLOAD_DIR, job_id, 'job.json')
+    try:
+        with open(job_file, 'w') as f:
+            json.dump(job, f)
+    except Exception:
+        pass
+
+
+def load_jobs_from_disk():
+    """Load previously saved jobs from disk. Called once at startup."""
+    if not os.path.exists(_UPLOAD_DIR):
+        return
+    for entry in os.listdir(_UPLOAD_DIR):
+        job_file = os.path.join(_UPLOAD_DIR, entry, 'job.json')
+        if not os.path.exists(job_file):
+            continue
+        try:
+            with open(job_file) as f:
+                job = json.load(f)
+            with _jobs_lock:
+                if job.get('id') and job['id'] not in _jobs:
+                    _jobs[job['id']] = job
+        except Exception:
+            pass
+
+
+# Load history on import
+load_jobs_from_disk()
 
 
 # ── Main processing loop ──────────────────────────────────────────────────────
@@ -117,11 +157,10 @@ def _process_job(job_id: str, pdf_paths: list, gtin_rows: list, work_dir: str):
     except Exception as exc:
         _update_job(job_id, status='error', error=str(exc), progress=0)
 
+    _save_job_to_disk(job_id)
+
 
 # ── Film vs pouch detection ───────────────────────────────────────────────────
-
-# Eyemark checks only apply to film/rollstock (stick packs, sachets, flow wrap).
-# Pouches, bags, canisters, and jars use a different registration method.
 
 _FILM_KEYWORDS  = {'stick', 'sachet', 'flow', 'rollstock', 'film', 'sleeve',
                    'wrapper', 'wrap', 'stickpack', 'stick_pack', 'stick-pack'}
@@ -131,14 +170,14 @@ _POUCH_KEYWORDS = {'pouch', 'bag', 'zip', 'mylar', 'doypack', 'doypak',
 
 
 def _is_film_rollstock(fname: str, ocr_text: str = '') -> bool:
-    """Return True if the design is film/rollstock (eyemark check applies).
-    Returns False for pouches, bags, and rigid packaging.
-    Defaults to True (apply the check) when the format cannot be determined.
+    """Return True only when the design is clearly identified as film/rollstock.
+    Defaults to False (skip eyemark check) when format is ambiguous — the check
+    is meaningless on pouches and should not produce false positives.
     """
     name = fname.lower()
     text = ocr_text.lower()
 
-    # Explicit pouch/bag indicators in filename → skip eyemark
+    # Explicit pouch/bag indicators → not film
     for kw in _POUCH_KEYWORDS:
         if kw in name:
             return False
@@ -154,8 +193,9 @@ def _is_film_rollstock(fname: str, ocr_text: str = '') -> bool:
     if any(kw in text for kw in _FILM_KEYWORDS):
         return True
 
-    # Cannot determine — default to applying the check so nothing is silently skipped
-    return True
+    # Cannot determine — default to skipping so pouches don't generate false positives.
+    # Rename the file to include "stick", "sachet", or "film" to enable this check.
+    return False
 
 
 # ── Single-file proofing ──────────────────────────────────────────────────────
@@ -167,12 +207,11 @@ def _proof_single(pdf_path: str, gtin_rows: list, work_dir: str) -> dict:
     # ── Convert PDF → PNG ────────────────────────────────────────────────────
     img_prefix = os.path.join(work_dir, stem)
     subprocess.run(
-        ['pdftoppm', '-r', '200', '-png', '-singlefile', pdf_path, img_prefix],
-        capture_output=True, check=True, timeout=90,
+        ['pdftoppm', '-r', '250', '-png', '-singlefile', pdf_path, img_prefix],
+        capture_output=True, check=True, timeout=120,
     )
     img_path = img_prefix + '.png'
     if not os.path.exists(img_path):
-        # pdftoppm sometimes appends page number
         candidates = sorted(
             f for f in os.listdir(work_dir)
             if f.startswith(stem) and f.endswith('.png')
@@ -185,7 +224,7 @@ def _proof_single(pdf_path: str, gtin_rows: list, work_dir: str) -> dict:
     ocr_text = ''
     try:
         r = subprocess.run(
-            ['tesseract', img_path, 'stdout', '--psm', '3', '-l', 'eng'],
+            ['tesseract', img_path, 'stdout', '--oem', '3', '--psm', '3', '-l', 'eng'],
             capture_output=True, text=True, timeout=120,
         )
         ocr_text = r.stdout
@@ -224,13 +263,10 @@ def _proof_single(pdf_path: str, gtin_rows: list, work_dir: str) -> dict:
     else:
         severity = 'clean'
 
-    # Web-accessible image path (relative to static folder or served directly)
-    img_web = img_path  # routes will serve via /proof/image/<job_id>/<filename>
-
     return {
         'filename': fname,
         'img_path': img_path,
-        'img_web': img_web,
+        'img_web': img_path,
         'ocr_preview': ocr_text[:2000],
         'checks': checks,
         'severity': severity,
@@ -246,9 +282,7 @@ def _proof_single(pdf_path: str, gtin_rows: list, work_dir: str) -> dict:
 def _check_gtin(ocr_text: str, fname: str, gtin_rows: list) -> dict:
     issues, notes = [], []
 
-    # 12-digit UPC-A (ProDough GTINs start with 850)
     raw12 = re.findall(r'\b(\d{12})\b', ocr_text)
-    # Also catch digit clusters with internal spaces (OCR artefacts)
     partial = re.findall(r'\b(\d{5,7})\s+(\d{4,7})\b', ocr_text)
     for a, b in partial:
         combined = a + b
@@ -256,7 +290,6 @@ def _check_gtin(ocr_text: str, fname: str, gtin_rows: list) -> dict:
             raw12.append(combined)
 
     found = list({g for g in raw12 if g[:3] in ('850', '840', '860', '870', '880', '890', '012', '075', '049')})
-    # Also accept any 12-digit number if no brand-prefix filter match
     if not found:
         found = list(set(raw12))
 
@@ -300,18 +333,16 @@ def _check_nfp(ocr_text: str) -> dict:
     if not has_nfp:
         notes.append(
             'Nutrition Facts (or Supplement Facts) panel not detected via OCR. '
-            'Text-as-outlines PDFs will not OCR — manually verify the NFP is present and correctly formatted.'
+            'Print-ready PDFs with text converted to outlines will not OCR — '
+            'verify manually that the NFP is present and correctly formatted.'
         )
 
-    # Calorie extraction
     cal_hits = re.findall(r'calories\s+(\d+)|(\d+)\s+calories', tl)
     calories = sorted({int(a or b) for a, b in cal_hits if 30 <= int(a or b) <= 800})
 
-    # Protein extraction
     prot_hits = re.findall(r'protein\s+(\d+)\s*g|(\d+)\s*g\s+protein', tl)
     proteins = sorted({int(a or b) for a, b in prot_hits if 0 < int(a or b) < 120})
 
-    # Net weight
     nw_hits = re.findall(r'net\s*wt\.?\s*([\d.]+)\s*g', tl)
 
     if len(set(calories)) > 1:
@@ -335,12 +366,11 @@ def _check_nfp(ocr_text: str) -> dict:
                 ),
             })
 
-    # 0G Added Sugar cross-check
     if re.search(r'0\s*g\s+added\s+sugar', tl):
         if not re.search(r'added\s+sugars?\s+0\s*g|added\s+sugars?\s*\n?\s*0', tl):
             notes.append(
                 '"0G Added Sugar" front claim detected. '
-                'Verify the NFP shows 0g for Added Sugars — OCR may have missed the NFP value.'
+                'Verify the NFP shows 0g for Added Sugars.'
             )
 
     return {
@@ -355,15 +385,14 @@ def _check_nfp(ocr_text: str) -> dict:
 
 # ── Check 3: Eyemark contrast ─────────────────────────────────────────────────
 
-def _check_eyemark(img, is_film: bool = True, fname: str = '') -> dict:
+def _check_eyemark(img, is_film: bool = False, fname: str = '') -> dict:
     issues, notes = [], []
 
     if not is_film:
         notes.append(
-            'Eyemark check not applicable — this appears to be a pouch or rigid packaging design. '
+            'Eyemark check skipped — this design does not appear to be film/rollstock. '
             'Eyemark registration marks are only required for film/rollstock (stick packs, sachets, flow wrap). '
-            'If this file is actually a film design, rename it to include "stick", "sachet", or "film" '
-            'and re-run the proof.'
+            'To enable this check, include "stick", "sachet", "film", or "rollstock" in the filename.'
         )
         return {'issues': issues, 'notes': notes, 'contrast': None, 'skipped': True}
 
@@ -381,12 +410,12 @@ def _check_eyemark(img, is_film: bool = True, fname: str = '') -> dict:
             return 128
         return sum(0.299 * r + 0.587 * g + 0.114 * b for r, g, b in pixels) / len(pixels)
 
-    mark_region = img.crop((w - mw, h - mh, w, h))
+    mark_region    = img.crop((w - mw, h - mh, w, h))
     surround_region = img.crop((w - mw * 3, h - mh * 3, w - mw, h - mh))
 
     mark_luma = luma(mark_region)
     surr_luma = luma(surround_region)
-    contrast = abs(mark_luma - surr_luma)
+    contrast  = abs(mark_luma - surr_luma)
 
     mark_desc = 'dark' if mark_luma < 80 else ('light' if mark_luma > 175 else 'medium')
     surr_desc = 'dark' if surr_luma < 80 else ('light' if surr_luma > 175 else 'medium')
@@ -422,23 +451,25 @@ def _check_eyemark(img, is_film: bool = True, fname: str = '') -> dict:
 # ── Check 4: Spelling / brand name ───────────────────────────────────────────
 
 _MISSPELLINGS = {
-    r'pro\s+dough':      'ProDough (no space)',
-    r'(?<!@)prodough(?!®|shop|\.)': 'ProDough (verify capital D and ® symbol)',
-    r'\bcheescake\b':    'cheesecake',
-    r'\bbanna\b':        'banana',
-    r'\bchoclate\b':     'chocolate',
-    r'\bvanila\b':       'vanilla',
-    r'\bcarmel\b':       'caramel',
-    r'\bcinamon\b':      'cinnamon',
-    r'\bstrwberry\b':    'strawberry',
-    r'\brasberry\b':     'raspberry',
-    r'\braspbery\b':     'raspberry',
-    r'\bprotien\b':      'protein',
-    r'\bingrediant':     'ingredient',
-    r'\bartifical\b':    'artificial',
-    r'\bnatrual\b':      'natural',
-    r'\bexellent\b':     'excellent',
-    r'\bnutrional\b':    'nutritional',
+    # Use word boundaries so "prodoughshop" and "@prodoughshop" are never matched.
+    # The (?!®|\(r\)) lookahead prevents flagging correctly formatted ProDough® text.
+    r'\bprodough\b(?!®|\(r\))': 'ProDough® (verify capital P, capital D, no space, and ® symbol)',
+    r'pro\s+dough':              'ProDough (should be one word, no space)',
+    r'\bcheescake\b':            'cheesecake',
+    r'\bbanna\b':                'banana',
+    r'\bchoclate\b':             'chocolate',
+    r'\bvanila\b':               'vanilla',
+    r'\bcarmel\b':               'caramel',
+    r'\bcinamon\b':              'cinnamon',
+    r'\bstrwberry\b':            'strawberry',
+    r'\brasberry\b':             'raspberry',
+    r'\braspbery\b':             'raspberry',
+    r'\bprotien\b':              'protein',
+    r'\bingrediant':             'ingredient',
+    r'\bartifical\b':            'artificial',
+    r'\bnatrual\b':              'natural',
+    r'\bexellent\b':             'excellent',
+    r'\bnutrional\b':            'nutritional',
 }
 
 
@@ -450,17 +481,18 @@ def _check_spelling(ocr_text: str, fname: str) -> dict:
             issues.append({
                 'severity': 'warning',
                 'message': (
-                    f'Possible misspelling — pattern matched: "{pattern.strip(chr(92)+"b").strip()}" '
-                    f'→ should be "{correction}". '
-                    'OCR errors can produce false positives; verify on the actual artwork file.'
+                    f'Possible misspelling detected → should be "{correction}". '
+                    'OCR on outlined-text PDFs can produce false positives; verify on the actual artwork file.'
                 ),
             })
 
-    # UK spelling note
     if re.search(r'\bflavour\b', ocr_text, re.IGNORECASE):
         notes.append('UK spelling "flavour" detected. US market labels should use "flavor".')
 
-    notes.append('Verify ProDough® wordmark uses capital P, capital D, no space, and the ® symbol.')
+    notes.append(
+        'ProDough® wordmark check: verify capital P, capital D, no space, and the ® symbol appear correctly. '
+        'Social handles (@prodoughshop) and website URLs (prodoughshop.com) are excluded from this check.'
+    )
 
     return {'issues': issues, 'notes': notes}
 
@@ -475,7 +507,7 @@ _DISEASE_CLAIM_PATTERNS = [
     (r'\bprevent[s]?\b.{0,40}(disease|cancer|diabetes|heart disease|stroke)',
      'disease prevention claim — prohibited without FDA approval (or an approved health claim)'),
     (r'lower[s]?\s+(your\s+)?cholesterol\b',
-     '"lowers cholesterol" — this is an authorized health claim but requires specific FDA-approved language and eligibility criteria (21 CFR 101.75)'),
+     '"lowers cholesterol" — authorized health claim requiring specific FDA-approved language (21 CFR 101.75)'),
     (r'reduc[es]+\s+.{0,20}risk\s+of\s+(cancer|diabetes|heart|stroke)',
      'disease risk-reduction claim — requires an FDA-approved health claim (21 CFR 101.14)'),
     (r'\bdiagnose[s]?\b.{0,30}(disease|disorder)',
@@ -493,9 +525,6 @@ _SF_CLAIM_PATTERNS = [
 
 
 def _ocr_is_sparse(ocr_text: str) -> bool:
-    """Return True when OCR yield is so low that absence-based checks are unreliable.
-    Typical print-ready PDFs with outlined text produce < 80 meaningful words.
-    """
     words = [w for w in ocr_text.split() if len(w) > 2]
     return len(words) < 80
 
@@ -507,59 +536,58 @@ def _check_fda(ocr_text: str, fname: str) -> dict:
     is_supplement = 'supplement facts' in tl
     sparse = _ocr_is_sparse(ocr_text)
 
-    # ── OCR quality warning ───────────────────────────────────────────────────
-    # Absence-based checks (missing NFP, ingredients, allergens, manufacturer)
-    # are unreliable when OCR text is sparse due to outlined/path text in PDFs.
     if sparse:
         notes.append(
-            'Low OCR yield detected — this PDF likely uses text converted to outlines '
-            '(standard for print-ready files). Absence-based checks below (NFP, ingredients, '
-            'allergens, manufacturer info) are flagged as warnings rather than critical issues '
-            'and should all be verified manually against the actual artwork.'
+            'Low OCR yield — this PDF likely uses text converted to outlines (standard for print-ready files). '
+            'The absence-based checks below (NFP, ingredients, allergens, manufacturer info) cannot be reliably '
+            'automated on outlined-text PDFs. Use the Manual Review page to zoom in and verify each element '
+            'directly on the rendered artwork image.'
         )
 
-    # ── Required elements ─────────────────────────────────────────────────────
-    # Severity is "warning" (not "critical") for absence-based checks because
-    # outlined text PDFs will not OCR — a missing detection is not proof of absence.
+    # ── Required label elements (absence-based — unreliable on outlined PDFs) ─
+    # Only flag these if OCR has meaningful yield; otherwise they are noise.
 
-    if 'nutrition facts' not in tl and 'supplement facts' not in tl:
-        issues.append({
-            'severity': 'warning',
-            'message': (
-                'Nutrition Facts (or Supplement Facts) panel not detected via OCR. '
-                'One is required on all packaged food and dietary supplement labels '
-                '(21 CFR 101.9 / 21 CFR 101.36). '
-                'Print-ready PDFs with outlined text will not OCR — verify the panel is present '
-                'and correctly formatted on the actual artwork.'
-            ),
-        })
+    if not sparse:
+        if 'nutrition facts' not in tl and 'supplement facts' not in tl:
+            issues.append({
+                'severity': 'warning',
+                'message': (
+                    'Nutrition Facts (or Supplement Facts) panel not detected via OCR. '
+                    'Required on all packaged food and dietary supplement labels (21 CFR 101.9 / 101.36). '
+                    'Verify manually on the actual artwork.'
+                ),
+            })
 
-    if 'ingredient' not in tl:
-        issues.append({
-            'severity': 'warning',
-            'message': (
-                'Ingredient list not detected via OCR. '
-                'An ingredient declaration is required on virtually all packaged food labels '
-                '(21 CFR 101.4). Verify manually on the actual artwork.'
-            ),
-        })
+        if 'ingredient' not in tl:
+            issues.append({
+                'severity': 'warning',
+                'message': (
+                    'Ingredient list not detected via OCR. '
+                    'Required on virtually all packaged food labels (21 CFR 101.4). '
+                    'Verify manually on the actual artwork.'
+                ),
+            })
+    else:
+        # Collapsed note for sparse OCR — avoid flooding the report with absence warnings
+        notes.append(
+            'Required label elements (NFP, ingredients, allergens, manufacturer info, net weight) '
+            'could not be verified via OCR due to outlined text. '
+            'Verify each of these is present and correctly formatted directly on the artwork file.'
+        )
 
-    # Allergen declaration
+    # ── Allergen declaration ───────────────────────────────────────────────────
     has_allergen_stmt = any(re.search(p, tl) for p in
                             [r'contains?:', r'\ballergen\b', r'allergy\s+info', r'may\s+contain'])
 
-    is_whey_product = any(w in fname.lower() or w in tl
-                          for w in ['whey', 'protein stick', 'protein powder'])
-    is_wheat_product = any(w in fname.lower() or w in tl
-                           for w in ['pancake', 'donut', 'flour', 'mix'])
+    is_whey_product   = any(w in fname.lower() or w in tl for w in ['whey', 'protein stick', 'protein powder'])
+    is_wheat_product  = any(w in fname.lower() or w in tl for w in ['pancake', 'donut', 'flour', 'mix'])
 
     if is_whey_product and 'milk' not in tl:
         issues.append({
             'severity': 'warning',
             'message': (
                 'Whey protein product — "milk" allergen declaration not detected via OCR. '
-                'FDA FALCPA (21 USC 343(w)) requires milk to be declared as a major food allergen '
-                '(in the ingredient list bolded/highlighted, or in a separate "Contains:" statement). '
+                'FDA FALCPA (21 USC 343(w)) requires milk to be declared as a major food allergen. '
                 'Verify the allergen statement is present on the actual artwork.'
             ),
         })
@@ -572,88 +600,78 @@ def _check_fda(ocr_text: str, fname: str) -> dict:
                 'Verify the allergen statement appears on the actual artwork.'
             ),
         })
-    elif not has_allergen_stmt:
+    elif not has_allergen_stmt and not sparse:
         issues.append({
             'severity': 'warning',
             'message': (
                 'No allergen declaration (e.g., "Contains: Milk") detected via OCR. '
-                'FALCPA requires declaration of the 9 major allergens: milk, eggs, fish, shellfish, '
-                'tree nuts, peanuts, wheat, soybeans, and sesame (since Jan 2023). '
-                'Verify manually on the actual artwork.'
+                'FALCPA requires declaration of the 9 major allergens. Verify manually.'
             ),
         })
 
-    # Manufacturer / distributor info
-    # Expanded detection: company name suffixes, address keywords, ZIP codes,
-    # and explicit "manufactured/distributed by" phrases.
-    _mfr_indicators = [
-        'manufactured by', 'distributed by', 'produced by',
-        'manufactured for', 'distributed for', 'packed by', 'bottled by',
-        'llc', 'inc.', 'corp.', 'company', 'co.', 'group', 'enterprises',
-        'nutrition', 'foods', 'labs', 'ops', 'industries', 'international',
-    ]
-    has_mfr_text = any(ind in tl for ind in _mfr_indicators)
-    has_zip = bool(re.search(r'\b\d{5}\b', ocr_text))  # US ZIP code
-    has_street = bool(re.search(
-        r'\b\d+\s+[NSEW]\.?\s+\d+|\b\d+\s+\w+\s+(st|ave|blvd|dr|rd|ln|way|pkwy|court|ct)\b',
-        tl
-    ))
+    # ── Manufacturer / distributor info ───────────────────────────────────────
+    if not sparse:
+        _mfr_indicators = [
+            'manufactured by', 'distributed by', 'produced by', 'manufactured for',
+            'distributed for', 'packed by', 'bottled by',
+            'llc', 'inc.', 'corp.', 'company', 'co.', 'group', 'enterprises',
+            'nutrition', 'foods', 'labs', 'ops', 'industries', 'international',
+        ]
+        has_mfr_text = any(ind in tl for ind in _mfr_indicators)
+        has_zip      = bool(re.search(r'\b\d{5}\b', ocr_text))
+        has_street   = bool(re.search(
+            r'\b\d+\s+[NSEW]\.?\s+\d+|\b\d+\s+\w+\s+(st|ave|blvd|dr|rd|ln|way|pkwy|court|ct)\b', tl
+        ))
 
-    if not (has_mfr_text or has_zip or has_street):
-        issues.append({
-            'severity': 'warning',
-            'message': (
-                'Manufacturer or distributor name/address not detected via OCR. '
-                '21 CFR 101.5 requires the name and place of business of the manufacturer, packer, '
-                'or distributor. Verify it appears on the actual artwork.'
-            ),
-        })
+        if not (has_mfr_text or has_zip or has_street):
+            issues.append({
+                'severity': 'warning',
+                'message': (
+                    'Manufacturer or distributor name/address not detected via OCR. '
+                    '21 CFR 101.5 requires the name and place of business of the manufacturer, packer, '
+                    'or distributor. Verify it appears on the actual artwork.'
+                ),
+            })
 
-    # Net weight
-    if not re.search(r'net\s*wt|net\s*weight', tl):
+    # ── Net weight ────────────────────────────────────────────────────────────
+    if not sparse and not re.search(r'net\s*wt|net\s*weight', tl):
         issues.append({
             'severity': 'warning',
             'message': (
                 'No "Net Wt" declaration detected. '
-                'Net quantity of contents is required on consumer food packages '
-                '(15 USC 1453 / 21 CFR 101.105). Verify manually.'
+                'Net quantity of contents is required (15 USC 1453 / 21 CFR 101.105). Verify manually.'
             ),
         })
-    else:
-        # Check for both metric and US customary
+    elif re.search(r'net\s*wt|net\s*weight', tl):
         has_g  = bool(re.search(r'net\s*wt.{0,20}\d+\s*g\b', tl))
         has_oz = bool(re.search(r'\d+\.?\d*\s*oz\b', tl))
         if has_g and not has_oz:
             notes.append(
                 'Net weight appears in grams only. '
-                'US regulations (15 USC 1453) generally require both metric (g) and US customary (oz) units '
-                'for packages sold domestically. Verify with your legal/regulatory team.'
+                'US regulations generally require both metric (g) and US customary (oz) units. '
+                'Verify with your legal/regulatory team.'
             )
 
-    # % Daily Values footnote
+    # ── % Daily Values footnote ───────────────────────────────────────────────
     if re.search(r'%\s*daily\s*value', tl) and 'based on a 2,000 calorie' not in tl and '2,000 calorie diet' not in tl:
         notes.append(
-            '% Daily Values are listed but the required footnote — '
+            '% Daily Values listed but the required footnote — '
             '"Percent Daily Values are based on a 2,000 calorie diet" — '
-            'was not detected. This footnote is required in the NFP (21 CFR 101.9(d)(9)).'
+            'was not detected (21 CFR 101.9(d)(9)).'
         )
 
     # ── Disease claims ────────────────────────────────────────────────────────
-
     for pattern, description in _DISEASE_CLAIM_PATTERNS:
         if re.search(pattern, tl):
             issues.append({
                 'severity': 'critical',
                 'message': (
                     f'Potential unauthorized disease claim detected: {description}. '
-                    'Unapproved disease claims on food or supplement labels are prohibited '
-                    '(21 CFR 101.14 / FD&C Act 403(r)). '
-                    'This would be a serious audit finding.'
+                    'Unapproved disease claims are prohibited (21 CFR 101.14 / FD&C Act 403(r)).'
                 ),
             })
 
     # ── Structure/function claims + disclaimer ────────────────────────────────
-
     sf_found = [p for p in _SF_CLAIM_PATTERNS if re.search(p, tl)]
     if sf_found and is_supplement:
         has_disclaimer = any(phrase in tl for phrase in [
@@ -670,19 +688,16 @@ def _check_fda(ocr_text: str, fname: str) -> dict:
                     'but the required FDA disclaimer is missing. '
                     'Per 21 CFR 101.93, labels must include: '
                     '"These statements have not been evaluated by the Food and Drug Administration. '
-                    'This product is not intended to diagnose, treat, cure, or prevent any disease." '
-                    'This is a mandatory label element and would be flagged in any FDA inspection.'
+                    'This product is not intended to diagnose, treat, cure, or prevent any disease."'
                 ),
             })
     elif sf_found and not is_supplement:
         notes.append(
-            'Structure/function-style claims detected ("supports...", "promotes...", etc.) '
-            'on a conventional food label. These are generally permissible for conventional foods '
-            'but must not imply treatment or prevention of disease.'
+            'Structure/function-style claims ("supports...", "promotes...", etc.) on a conventional food label. '
+            'Generally permissible but must not imply treatment or prevention of disease.'
         )
 
     # ── "All Natural" / "Natural" claim ──────────────────────────────────────
-
     if re.search(r'\ball\s+natural\b|\bnatural\s+ingredients?\b|\b100%\s+natural\b', tl):
         artificial_markers = [
             'artificial', 'synthetic', 'fd&c', 'fdc', 'acesulfame', 'sucralose',
@@ -692,124 +707,92 @@ def _check_fda(ocr_text: str, fname: str) -> dict:
             issues.append({
                 'severity': 'critical',
                 'message': (
-                    '"Natural" or "All Natural" claim appears alongside what may be an artificial '
-                    'ingredient or additive. FDA\'s informal policy (2018 guidance) considers '
-                    '"natural" to mean nothing artificial or synthetic has been added. '
-                    'If artificial additives are present, this claim would be challenged in an audit.'
+                    '"Natural" or "All Natural" claim appears alongside what may be an artificial ingredient. '
+                    'FDA\'s informal policy considers "natural" to mean nothing artificial or synthetic has been added.'
                 ),
             })
         else:
             notes.append(
                 '"All Natural" or "Natural Ingredients" claim detected. '
-                'Ensure no artificial flavors, colors, or synthetic preservatives are present '
-                '(FDA informal guidance on "natural", 2018).'
+                'Ensure no artificial flavors, colors, or synthetic preservatives are present (FDA 2018 guidance).'
             )
 
     # ── Gluten-Free claim ─────────────────────────────────────────────────────
-
     if re.search(r'gluten[\s\-]?free', tl):
         if any(w in tl for w in ['wheat', 'barley', 'rye', 'triticale']):
             issues.append({
                 'severity': 'critical',
                 'message': (
                     '"Gluten-Free" claim detected alongside wheat/barley/rye in OCR text. '
-                    'If the product contains these ingredients, the GF claim is prohibited '
-                    '(21 CFR 101.91). Clarify whether this is a cross-contact statement or an ingredient.'
+                    'If the product contains these ingredients, the GF claim is prohibited (21 CFR 101.91).'
                 ),
             })
         else:
             notes.append(
-                '"Gluten-Free" claim detected. '
-                'Under 21 CFR 101.91, the product must contain < 20 ppm gluten. '
+                '"Gluten-Free" claim detected. Under 21 CFR 101.91, product must contain < 20 ppm gluten. '
                 'Ensure third-party testing records are on file.'
             )
 
     # ── Organic claim ─────────────────────────────────────────────────────────
-
     if re.search(r'\borganic\b', tl):
         if 'usda organic' not in tl and 'certified organic' not in tl:
             issues.append({
                 'severity': 'warning',
                 'message': (
-                    '"Organic" claim detected without apparent USDA Organic seal or '
-                    '"Certified Organic" language. '
-                    'Organic claims require USDA National Organic Program certification '
-                    '(7 CFR Part 205). Using "organic" without certification is a federal violation.'
+                    '"Organic" claim detected without apparent USDA Organic seal or "Certified Organic" language. '
+                    'Organic claims require USDA NOP certification (7 CFR Part 205).'
                 ),
             })
 
     # ── Nutrient content claims ───────────────────────────────────────────────
-
     if re.search(r'high\s+protein|excellent\s+source\s+of\s+protein', tl):
         notes.append(
             '"High Protein" / "Excellent Source of Protein" claim: '
-            'FDA requires ≥ 10g protein per RACC and ≥ 20% DV corrected for protein digestibility '
-            '(21 CFR 101.54(e)). Verify the NFP protein content and PDCAAS value support this claim.'
+            'FDA requires ≥ 10g protein per RACC and ≥ 20% DV corrected for PDCAAS (21 CFR 101.54(e)).'
         )
 
     if re.search(r'good\s+source\s+of\s+protein', tl):
-        notes.append(
-            '"Good Source of Protein" claim: FDA requires 10–19% DV (21 CFR 101.54(e)). '
-            'Verify with corrected protein value.'
-        )
+        notes.append('"Good Source of Protein" claim: FDA requires 10–19% DV (21 CFR 101.54(e)).')
 
     # ── Grass-Fed claim ───────────────────────────────────────────────────────
-
     if re.search(r'grass[\s\-]?fed', tl):
         notes.append(
-            '"Grass-Fed" claim detected. '
-            'USDA has a voluntary process claim standard for "grass fed" ruminant animals. '
-            'Ensure your whey protein supplier can provide documentation supporting this claim. '
+            '"Grass-Fed" claim detected. Ensure your whey protein supplier can provide documentation. '
             'Third-party certification (e.g., AGA) is strongly recommended.'
         )
 
-    # ── "100% Whey" or protein source claim ──────────────────────────────────
-
+    # ── 100% protein source claim ─────────────────────────────────────────────
     if re.search(r'100%\s+(whey|plant|beef)\s+protein', tl):
         notes.append(
-            '"100% [Whey/Plant/Beef] Protein" claim: '
-            'Verify there are no other protein sources in the formulation, '
-            'or this claim may be challenged as misleading (21 CFR 101.13).'
+            '"100% [Whey/Plant/Beef] Protein" claim: verify there are no other protein sources in the formulation.'
         )
 
-    # ── Sesame allergen (FASTER Act, effective Jan 1, 2023) ───────────────────
-
+    # ── Sesame allergen (FASTER Act, Jan 2023) ────────────────────────────────
     if re.search(r'\bsesame\b|\btahini\b', tl):
         notes.append(
-            'Sesame detected in OCR. '
-            'Under the FASTER Act (effective Jan 1, 2023), sesame is the 9th major food allergen '
-            'and must be declared on US food labels (21 USC 321(qq)(2)). '
-            'Confirm the allergen statement includes sesame.'
+            'Sesame detected. Under the FASTER Act (effective Jan 1, 2023), sesame is the 9th major allergen '
+            'and must be declared on US food labels (21 USC 321(qq)(2)).'
         )
 
-    # ── Bioengineered (BE) food disclosure ────────────────────────────────────
-
+    # ── Bioengineered food disclosure ─────────────────────────────────────────
     if any(re.search(p, tl) for p in [r'non[\s\-]?gmo', r'bioengineered', r'derived from bioengineering']):
         notes.append(
             'Non-GMO or Bioengineered (BE) disclosure detected. '
-            'USDA\'s National Bioengineered Food Disclosure Standard (7 CFR Part 66, effective Jan 2022) '
-            'requires specific disclosure language or symbols if the food is a "bioengineered food." '
-            'Verify your disclosure format is compliant. '
+            'USDA\'s BE Food Disclosure Standard (7 CFR Part 66, effective Jan 2022) requires specific language. '
             '"Non-GMO" is not a compliant substitute for BE disclosure if the product is in fact BE.'
         )
 
     # ── "Made in USA" claim ───────────────────────────────────────────────────
-
     if re.search(r'made\s+in\s+(the\s+)?usa|made\s+in\s+america', tl):
         notes.append(
-            '"Made in USA" claim detected. '
-            'FTC requires "all or virtually all" content to be US-origin (FTC Policy Statement 1998). '
-            'If any foreign-sourced ingredients are used (e.g., whey from NZ), '
-            'the claim may need to be qualified (e.g., "Made in USA from domestic and imported ingredients").'
+            '"Made in USA" claim detected. FTC requires "all or virtually all" US-origin content. '
+            'If foreign-sourced ingredients are used, the claim may need to be qualified.'
         )
 
     # ── Caffeine / stimulants ─────────────────────────────────────────────────
-
     if re.search(r'\bcaffeine\b|\bguarana\b|\bgreen\s+tea\s+extract\b|\bgreen\s+coffee\b', tl):
         notes.append(
             'Caffeine or stimulant ingredient detected. '
-            'FDA\'s Generally Recognized as Safe (GRAS) status for caffeine applies to cola beverages; '
-            'high-dose caffeine in dietary supplements has heightened FDA scrutiny. '
             'Ensure caffeine amount is listed and total is within safe limits.'
         )
 
@@ -822,10 +805,11 @@ def _build_summary(results: list) -> dict:
     total = len(results)
     counts = {'clean': 0, 'info': 0, 'warning': 0, 'critical': 0, 'error': 0}
     for r in results:
-        counts[r.get('severity', 'error')] = counts.get(r.get('severity', 'error'), 0) + 1
+        sev = r.get('severity', 'error')
+        counts[sev] = counts.get(sev, 0) + 1
 
-    total_crits  = sum(r.get('critical_count', 0) for r in results)
-    total_warns  = sum(r.get('warning_count', 0) for r in results)
+    total_crits = sum(r.get('critical_count', 0) for r in results)
+    total_warns = sum(r.get('warning_count', 0) for r in results)
 
     fda_crits = []
     for r in results:

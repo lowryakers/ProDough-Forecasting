@@ -155,6 +155,12 @@ def summary(job_id):
     return render_template('summary.html', job=job, job_id=job_id)
 
 
+@app.route('/history')
+def history():
+    jobs = proof_engine.list_jobs()
+    return render_template('history.html', jobs=jobs)
+
+
 @app.route('/viewer/<job_id>')
 def viewer(job_id):
     job = proof_engine.get_job(job_id)
@@ -277,11 +283,21 @@ def _parse_gtin_list(data: bytes, filename: str) -> list:
                 if not any(row):
                     continue
                 d = dict(zip(headers, row))
-                gtin   = d.get('gtin/barcode#') or d.get('gtin') or d.get('barcode') or d.get('upc') or ''
-                flavor = d.get('flavor') or d.get('product name') or d.get('name') or ''
-                sku    = d.get('sku') or ''
+                gtin_raw = d.get('gtin/barcode#') or d.get('gtin') or d.get('barcode') or d.get('upc') or ''
+                flavor   = d.get('flavor') or d.get('product name') or d.get('name') or ''
+                sku      = d.get('sku') or ''
+                # Excel stores long numbers as floats (e.g. 850012345678.0) — convert via int first
+                if isinstance(gtin_raw, (int, float)):
+                    gtin_str = str(int(gtin_raw))
+                else:
+                    gtin_str = str(gtin_raw).strip().replace(' ', '')
+                    if '.' in gtin_str and gtin_str.replace('.', '').replace('-', '').isdigit():
+                        try:
+                            gtin_str = str(int(float(gtin_str)))
+                        except (ValueError, OverflowError):
+                            pass
                 rows.append({
-                    'gtin':   str(gtin).strip().replace(' ', ''),
+                    'gtin':   gtin_str,
                     'flavor': str(flavor).strip().lower(),
                     'sku':    str(sku).strip(),
                 })

@@ -71,13 +71,22 @@
       <div class="card shadow-sm mb-3">
         <div class="card-header bg-light py-2 d-flex align-items-center gap-2 flex-wrap">
           <span class="small fw-semibold text-truncate flex-grow-1">{{ r.filename }}</span>
-          <div class="d-flex gap-1 ms-auto flex-shrink-0">
+          <div class="d-flex gap-1 ms-auto flex-shrink-0 flex-wrap">
+            <button class="btn btn-sm btn-outline-secondary" onclick="rotate({{ loop.index0 }}, -90)"
+                    title="Rotate 90° counter-clockwise">
+              <i class="bi bi-arrow-counterclockwise"></i>
+            </button>
+            <button class="btn btn-sm btn-outline-secondary" onclick="rotate({{ loop.index0 }}, 90)"
+                    title="Rotate 90° clockwise">
+              <i class="bi bi-arrow-clockwise"></i>
+            </button>
+            <div class="vr mx-1"></div>
             <button class="btn btn-sm btn-outline-secondary" onclick="zoom({{ loop.index0 }}, -0.25)"
                     title="Zoom out">
               <i class="bi bi-zoom-out"></i>
             </button>
             <button class="btn btn-sm btn-outline-secondary" onclick="zoom({{ loop.index0 }}, 0)"
-                    title="Reset zoom">
+                    title="Reset zoom &amp; rotation">
               <i class="bi bi-aspect-ratio"></i>
             </button>
             <button class="btn btn-sm btn-outline-secondary" onclick="zoom({{ loop.index0 }}, 0.25)"
@@ -152,7 +161,8 @@
 
 {% block scripts %}
 <script>
-const scales = {};
+const scales  = {};
+const rotations = {};
 
 function selectFile(idx) {
   document.querySelectorAll('.file-panel').forEach(p => p.classList.add('d-none'));
@@ -161,21 +171,33 @@ function selectFile(idx) {
   document.getElementById('fbtn' + idx).classList.add('active');
 }
 
-function zoom(idx, delta) {
-  if (scales[idx] === undefined) scales[idx] = 1.0;
-  scales[idx] = delta === 0 ? 1.0 : Math.max(0.25, Math.min(5, scales[idx] + delta));
+function applyTransform(idx) {
+  const s = scales[idx]    ?? 1.0;
+  const r = rotations[idx] ?? 0;
   const wrap  = document.getElementById('imgWrap' + idx);
   const label = document.getElementById('zoomLabel' + idx);
-  if (wrap)  wrap.style.transform = `scale(${scales[idx]})`;
-  if (label) label.textContent = Math.round(scales[idx] * 100) + '%';
+  if (wrap)  wrap.style.transform = `rotate(${r}deg) scale(${s})`;
+  if (label) label.textContent = Math.round(s * 100) + '%';
 }
 
-/* Mouse-wheel zoom on the image box */
+function zoom(idx, delta) {
+  if (delta === 0) { scales[idx] = 1.0; rotations[idx] = 0; }
+  else scales[idx] = Math.max(0.25, Math.min(5, (scales[idx] ?? 1.0) + delta));
+  applyTransform(idx);
+}
+
+function rotate(idx, deg) {
+  rotations[idx] = ((rotations[idx] ?? 0) + deg + 360) % 360;
+  applyTransform(idx);
+}
+
+/* Mouse-wheel zoom */
 document.querySelectorAll('[id^="imgBox"]').forEach(box => {
   box.addEventListener('wheel', e => {
     e.preventDefault();
-    const idx = box.id.replace('imgBox', '');
-    zoom(parseInt(idx), e.deltaY < 0 ? 0.15 : -0.15);
+    const idx = parseInt(box.id.replace('imgBox', ''));
+    scales[idx] = Math.max(0.25, Math.min(5, (scales[idx] ?? 1.0) + (e.deltaY < 0 ? 0.15 : -0.15)));
+    applyTransform(idx);
   }, { passive: false });
 });
 </script>
