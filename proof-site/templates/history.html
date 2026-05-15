@@ -1,0 +1,145 @@
+{% extends 'base.html' %}
+{% block title %}Proof History — ProDough{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center gap-3 mb-4">
+  <div>
+    <h4 class="mb-0 fw-bold"><i class="bi bi-clock-history text-primary me-2"></i>Proof History</h4>
+    <div class="text-muted small">
+      {{ jobs | length }} job{{ 's' if jobs | length != 1 }} on record
+      &bull; Saved across sessions
+    </div>
+  </div>
+  <div class="ms-auto">
+    <a href="{{ url_for('index') }}" class="btn btn-primary btn-sm">
+      <i class="bi bi-plus-circle me-1"></i>New Proof
+    </a>
+  </div>
+</div>
+
+{% if not jobs %}
+<div class="card shadow-sm">
+  <div class="card-body text-center py-5 text-muted">
+    <i class="bi bi-inbox fs-1 d-block mb-3 opacity-50"></i>
+    <h5>No proof history yet</h5>
+    <p class="mb-3">Run your first proof to see it here.</p>
+    <a href="{{ url_for('index') }}" class="btn btn-primary">
+      <i class="bi bi-upload me-2"></i>Upload Artwork
+    </a>
+  </div>
+</div>
+{% else %}
+
+<div class="card shadow-sm">
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0 small">
+      <thead class="table-light">
+        <tr>
+          <th class="ps-3" style="width:140px">Date</th>
+          <th style="width:70px">Job ID</th>
+          <th>Files</th>
+          <th class="text-center" style="width:100px">Critical</th>
+          <th class="text-center" style="width:100px">Warnings</th>
+          <th class="text-center" style="width:90px">Status</th>
+          <th class="pe-3 text-end" style="width:180px">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for job in jobs %}
+        <tr>
+          <td class="ps-3 text-muted">
+            {{ job.created[:10] }}<br>
+            <span class="text-muted" style="font-size:.7rem">{{ job.created[11:16] }}</span>
+          </td>
+          <td>
+            <code class="small">{{ job.id }}</code>
+          </td>
+          <td>
+            <div style="max-width:320px">
+              {% set fnames = job.filenames or [] %}
+              {% if fnames | length <= 3 %}
+                {% for f in fnames %}
+                <div class="text-truncate" title="{{ f }}">{{ f }}</div>
+                {% endfor %}
+              {% else %}
+                {% for f in fnames[:2] %}
+                <div class="text-truncate" title="{{ f }}">{{ f }}</div>
+                {% endfor %}
+                <span class="text-muted">+ {{ fnames | length - 2 }} more</span>
+              {% endif %}
+            </div>
+          </td>
+          <td class="text-center">
+            {% if job.status == 'done' %}
+              {% set crits = job.summary.get('total_critical_issues', 0) %}
+              {% if crits > 0 %}
+                <span class="badge bg-danger">{{ crits }}</span>
+              {% else %}
+                <span class="text-muted">—</span>
+              {% endif %}
+            {% else %}
+              <span class="text-muted">—</span>
+            {% endif %}
+          </td>
+          <td class="text-center">
+            {% if job.status == 'done' %}
+              {% set warns = job.summary.get('total_warning_issues', 0) %}
+              {% if warns > 0 %}
+                <span class="badge bg-warning text-dark">{{ warns }}</span>
+              {% else %}
+                <span class="text-muted">—</span>
+              {% endif %}
+            {% else %}
+              <span class="text-muted">—</span>
+            {% endif %}
+          </td>
+          <td class="text-center">
+            {% if job.status == 'done' %}
+              {% set crits = job.summary.get('total_critical_issues', 0) %}
+              {% set warns = job.summary.get('total_warning_issues', 0) %}
+              {% if crits > 0 %}
+                <span class="badge bg-danger">Critical</span>
+              {% elif warns > 0 %}
+                <span class="badge bg-warning text-dark">Warnings</span>
+              {% else %}
+                <span class="badge bg-success">Clean</span>
+              {% endif %}
+            {% elif job.status == 'running' %}
+              <span class="badge bg-primary">Running</span>
+            {% elif job.status == 'error' %}
+              <span class="badge bg-danger">Error</span>
+            {% else %}
+              <span class="badge bg-secondary">Pending</span>
+            {% endif %}
+          </td>
+          <td class="pe-3 text-end">
+            <a href="{{ url_for('result', job_id=job.id) }}"
+               class="btn btn-sm btn-outline-primary">
+              <i class="bi bi-file-earmark-check me-1"></i>Report
+            </a>
+            {% if job.status == 'done' %}
+            <a href="{{ url_for('summary', job_id=job.id) }}"
+               class="btn btn-sm btn-outline-secondary ms-1">
+              <i class="bi bi-clipboard2-check me-1"></i>Summary
+            </a>
+            <a href="{{ url_for('download_report', job_id=job.id) }}"
+               class="btn btn-sm btn-outline-success ms-1" title="Download .xlsx report">
+              <i class="bi bi-download"></i>
+            </a>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="text-muted small mt-2 ps-1">
+  <i class="bi bi-info-circle me-1"></i>
+  Job history is saved to disk and persists across server restarts.
+  For permanent storage across Railway redeploys, add a Railway Volume mounted at <code>/app/uploads</code>.
+</div>
+
+{% endif %}
+{% endblock %}

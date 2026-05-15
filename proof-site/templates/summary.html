@@ -1,0 +1,366 @@
+{% extends 'base.html' %}
+{% block title %}Full Summary — {{ job_id }} — ProDough Proof{% endblock %}
+
+{% block content %}
+{% set results    = job.results %}
+{% set dismissals = job.get('dismissals', {}) %}
+
+{# ── Pre-compute filtered issue lists (respects dismissals) ── #}
+{% set all_crits = [] %}
+{% set all_warns = [] %}
+{% for r in results %}
+  {% if not r.error %}
+    {% for check_name, check in r.checks.items() %}
+      {% for issue in check.get('issues', []) %}
+        {% set dkey = r.filename ~ '|' ~ check_name ~ '|' ~ loop.index0 %}
+        {% if not dismissals.get(dkey, false) %}
+          {% if issue.severity == 'critical' %}
+            {% set _ = all_crits.append({'file': r.filename, 'check': check_name, 'message': issue.message}) %}
+          {% elif issue.severity == 'warning' %}
+            {% set _ = all_warns.append({'file': r.filename, 'check': check_name, 'message': issue.message}) %}
+          {% endif %}
+        {% endif %}
+      {% endfor %}
+    {% endfor %}
+  {% endif %}
+{% endfor %}
+
+{% set dismissed_count = dismissals | length %}
+{% set clean_files = results | selectattr('severity', 'in', ['clean', 'info']) | list %}
+
+<!-- Header -->
+<div class="d-flex align-items-center gap-3 mb-4 flex-wrap no-print">
+  <div>
+    <h4 class="mb-0 fw-bold"><i class="bi bi-clipboard2-check text-primary me-2"></i>Full Proof Summary</h4>
+    <div class="text-muted small">
+      Job {{ job_id }} &bull; {{ job.created[:19].replace('T',' ') }} &bull; {{ results | length }} file{{ 's' if results | length != 1 }}
+      {% if dismissed_count > 0 %}
+      &bull; <span class="text-muted">{{ dismissed_count }} flag{{ 's' if dismissed_count != 1 }} dismissed</span>
+      {% endif %}
+    </div>
+  </div>
+  <div class="ms-auto d-flex gap-2 flex-wrap">
+    <a href="{{ url_for('result', job_id=job_id) }}" class="btn btn-outline-secondary btn-sm">
+      <i class="bi bi-layout-split me-1"></i>Per-File View
+    </a>
+    <a href="{{ url_for('viewer', job_id=job_id) }}" class="btn btn-outline-info btn-sm">
+      <i class="bi bi-zoom-in me-1"></i>Manual Review
+    </a>
+    <a href="{{ url_for('download_report', job_id=job_id) }}" class="btn btn-success btn-sm">
+      <i class="bi bi-download me-1"></i>Download Report
+    </a>
+    <button class="btn btn-outline-primary btn-sm" onclick="window.print()">
+      <i class="bi bi-printer me-1"></i>Print / Save PDF
+    </button>
+    <a href="{{ url_for('index') }}" class="btn btn-outline-secondary btn-sm">
+      <i class="bi bi-arrow-left me-1"></i>New Proof
+    </a>
+  </div>
+</div>
+
+<!-- Print header -->
+<div class="print-only mb-4">
+  <h3 class="fw-bold mb-1">ProDough Artwork Proof — Full Summary</h3>
+  <div class="text-muted small">Job {{ job_id }} &bull; {{ job.created[:19].replace('T',' ') }}</div>
+</div>
+
+<!-- Scorecard (uses filtered counts) -->
+<div class="row g-3 mb-4">
+  <div class="col-6 col-sm-3">
+    <div class="card border-0 shadow-sm text-center h-100">
+      <div class="card-body py-3">
+        <div class="fs-2 fw-bold">{{ results | length }}</div>
+        <div class="text-muted small">Files Proofed</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-sm-3">
+    <div class="card border-0 shadow-sm text-center h-100 {{ 'bg-danger text-white' if all_crits else 'bg-success text-white' }}">
+      <div class="card-body py-3">
+        <div class="fs-2 fw-bold">{{ all_crits | length }}</div>
+        <div class="small">Critical Issues</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-sm-3">
+    <div class="card border-0 shadow-sm text-center h-100 {{ 'bg-warning' if all_warns else 'bg-light' }}">
+      <div class="card-body py-3">
+        <div class="fs-2 fw-bold">{{ all_warns | length }}</div>
+        <div class="text-dark small">Warnings</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-sm-3">
+    <div class="card border-0 shadow-sm text-center h-100 {{ 'bg-secondary text-white' if dismissed_count else 'bg-light' }}">
+      <div class="card-body py-3">
+        <div class="fs-2 fw-bold">{{ dismissed_count }}</div>
+        <div class="small {{ 'text-white' if dismissed_count else 'text-muted' }}">Dismissed</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- File status overview table (dismiss-aware per-check icons) -->
+<div class="card shadow-sm mb-4">
+  <div class="card-header fw-semibold bg-light py-2">
+    <i class="bi bi-table me-1"></i>File Status Overview
+  </div>
+  <div class="table-responsive">
+    <table class="table table-sm table-hover align-middle mb-0 small">
+      <thead class="table-light">
+        <tr>
+          <th class="ps-3">File</th>
+          <th class="text-center">GTIN</th>
+          <th class="text-center">NFP</th>
+          <th class="text-center">Eyemark</th>
+          <th class="text-center">Spelling</th>
+          <th class="text-center">FDA</th>
+          <th class="text-center pe-3">Overall</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in results %}
+        {% if not r.error %}
+        <tr>
+          <td class="ps-3 fw-semibold">{{ r.filename }}</td>
+          {{ _check_cell(r.checks.gtin,     r.filename, 'gtin',     dismissals) }}
+          {{ _check_cell(r.checks.nfp,      r.filename, 'nfp',      dismissals) }}
+          {{ _check_cell(r.checks.eyemark,  r.filename, 'eyemark',  dismissals) }}
+          {{ _check_cell(r.checks.spelling, r.filename, 'spelling', dismissals) }}
+          {{ _check_cell(r.checks.fda,      r.filename, 'fda',      dismissals) }}
+          <td class="text-center pe-3">
+            {# Recompute per-file severity after dismissals #}
+            {% set file_crits = [] %}
+            {% set file_warns = [] %}
+            {% for check_name, check in r.checks.items() %}
+              {% for issue in check.get('issues', []) %}
+                {% set dkey = r.filename ~ '|' ~ check_name ~ '|' ~ loop.index0 %}
+                {% if not dismissals.get(dkey, false) %}
+                  {% if issue.severity == 'critical' %}{% set _ = file_crits.append(1) %}{% endif %}
+                  {% if issue.severity == 'warning'  %}{% set _ = file_warns.append(1) %}{% endif %}
+                {% endif %}
+              {% endfor %}
+            {% endfor %}
+            {% if file_crits %}
+              <span class="badge bg-danger">{{ file_crits | length }} critical</span>
+            {% elif file_warns %}
+              <span class="badge bg-warning text-dark">{{ file_warns | length }} warnings</span>
+            {% else %}
+              <span class="badge bg-success">Clean</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr class="table-secondary">
+          <td class="ps-3 text-muted fst-italic" colspan="7">{{ r.filename }} — error: {{ r.error }}</td>
+        </tr>
+        {% endif %}
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Critical issues (filtered) -->
+{% if all_crits %}
+<div class="card shadow-sm mb-4 border-danger">
+  <div class="card-header fw-semibold bg-danger bg-opacity-10 text-danger py-2">
+    <i class="bi bi-x-octagon-fill me-1"></i>Critical Issues — Must Fix Before Print
+    <span class="badge bg-danger ms-2">{{ all_crits | length }}</span>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-sm mb-0 small align-top">
+      <thead class="table-light">
+        <tr>
+          <th class="ps-3" style="width:30%">File</th>
+          <th style="width:12%">Check</th>
+          <th class="pe-3">Issue</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in all_crits %}
+        <tr>
+          <td class="ps-3 fw-semibold align-top">{{ item.file }}</td>
+          <td class="text-muted align-top">{{ _check_label(item.check) }}</td>
+          <td class="pe-3 align-top">{{ item.message }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<!-- Warnings (filtered) -->
+{% if all_warns %}
+<div class="card shadow-sm mb-4 border-warning">
+  <div class="card-header fw-semibold bg-warning bg-opacity-10 py-2">
+    <i class="bi bi-exclamation-triangle-fill text-warning me-1"></i>Warnings — Verify Before Print
+    <span class="badge bg-warning text-dark ms-2">{{ all_warns | length }}</span>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-sm mb-0 small align-top">
+      <thead class="table-light">
+        <tr>
+          <th class="ps-3" style="width:30%">File</th>
+          <th style="width:12%">Check</th>
+          <th class="pe-3">Issue</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in all_warns %}
+        <tr>
+          <td class="ps-3 fw-semibold align-top">{{ item.file }}</td>
+          <td class="text-muted align-top">{{ _check_label(item.check) }}</td>
+          <td class="pe-3 align-top">{{ item.message }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{% if not all_crits and not all_warns %}
+<div class="alert alert-success d-flex align-items-center gap-2 mb-4">
+  <i class="bi bi-check-circle-fill fs-4"></i>
+  <span><strong>No open issues.</strong>
+  {% if dismissed_count > 0 %}{{ dismissed_count }} flag{{ 's' if dismissed_count != 1 }} were reviewed and dismissed.{% endif %}
+  All files are ready to proceed.</span>
+</div>
+{% endif %}
+
+<!-- FDA section (active issues only) -->
+<div class="card shadow-sm mb-4">
+  <div class="card-header fw-semibold bg-light py-2">
+    <i class="bi bi-shield-exclamation me-1 text-danger"></i>FDA Audit Risk — All Files
+  </div>
+  <div class="card-body p-0">
+    {% set has_fda = namespace(value=false) %}
+    {% for r in results %}
+      {% if not r.error and r.checks.fda %}
+        {% set fda = r.checks.fda %}
+        {% set fda_notes = fda.get('notes', []) %}
+        {# Only active (non-dismissed) fda issues #}
+        {% set active_fda_issues = [] %}
+        {% for issue in fda.get('issues', []) %}
+          {% set dkey = r.filename ~ '|fda|' ~ loop.index0 %}
+          {% if not dismissals.get(dkey, false) %}
+            {% set _ = active_fda_issues.append(issue) %}
+          {% endif %}
+        {% endfor %}
+        {% if active_fda_issues or fda_notes %}
+          {% set has_fda.value = true %}
+          <div class="border-bottom px-3 py-2">
+            <div class="fw-semibold small mb-1">
+              {% if active_fda_issues | selectattr('severity','equalto','critical') | list %}
+                <i class="bi bi-x-circle-fill text-danger me-1"></i>
+              {% elif active_fda_issues %}
+                <i class="bi bi-exclamation-triangle-fill text-warning me-1"></i>
+              {% else %}
+                <i class="bi bi-check-circle-fill text-success me-1"></i>
+              {% endif %}
+              {{ r.filename }}
+            </div>
+            {% for issue in active_fda_issues %}
+              <div class="d-flex gap-2 mb-1 small p-2 rounded
+                {% if issue.severity == 'critical' %}bg-danger bg-opacity-10
+                {% elif issue.severity == 'warning' %}bg-warning bg-opacity-10
+                {% else %}bg-info bg-opacity-10{% endif %}">
+                <i class="bi
+                  {% if issue.severity == 'critical' %}bi-x-circle-fill text-danger
+                  {% elif issue.severity == 'warning' %}bi-exclamation-triangle-fill text-warning
+                  {% else %}bi-info-circle-fill text-info{% endif %}
+                  flex-shrink-0 mt-1"></i>
+                <span>{{ issue.message }}</span>
+              </div>
+            {% endfor %}
+            {% if fda_notes %}
+              <div class="small text-muted mt-1 ps-1">
+                {% for note in fda_notes %}
+                  <div class="d-flex gap-1 mb-1"><i class="bi bi-dot"></i><span>{{ note }}</span></div>
+                {% endfor %}
+              </div>
+            {% endif %}
+          </div>
+        {% endif %}
+      {% endif %}
+    {% endfor %}
+    {% if not has_fda.value %}
+      <div class="p-3 text-muted small text-center">No FDA issues detected across all files.</div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Footer note -->
+<div class="alert alert-secondary small mt-2 no-print">
+  <i class="bi bi-info-circle me-1"></i>
+  FDA flags are pattern-matched from OCR text. Print-ready PDFs with outlined text have limited OCR accuracy.
+  Treat all absence-based warnings as manual verification items, not confirmed defects.
+  Always have a regulatory professional review final labels before printing.
+</div>
+<div class="print-only text-muted small mt-4 border-top pt-2">
+  Generated {{ job.created[:19].replace('T',' ') }} by ProDough Artwork Proof &bull;
+  FDA flags are OCR-based — verify manually. Not a substitute for regulatory review.
+</div>
+
+{% endblock %}
+
+
+{# ── Helper macros ── #}
+
+{% macro _check_cell(check, filename, check_name, dismissals) %}
+{% if not check %}
+  <td class="text-center text-muted">—</td>
+{% else %}
+  {% set issues = check.get('issues', []) %}
+  {% set skipped = check.get('skipped', false) %}
+  {% set active_crits = [] %}
+  {% set active_warns = [] %}
+  {% for issue in issues %}
+    {% set dkey = filename ~ '|' ~ check_name ~ '|' ~ loop.index0 %}
+    {% if not dismissals.get(dkey, false) %}
+      {% if issue.severity == 'critical' %}{% set _ = active_crits.append(1) %}{% endif %}
+      {% if issue.severity == 'warning'  %}{% set _ = active_warns.append(1) %}{% endif %}
+    {% endif %}
+  {% endfor %}
+  <td class="text-center">
+    {% if skipped %}
+      <span class="text-muted small" title="Not applicable for this package type">N/A</span>
+    {% elif active_crits %}
+      <i class="bi bi-x-circle-fill text-danger" title="{{ active_crits|length }} critical"></i>
+    {% elif active_warns %}
+      <i class="bi bi-exclamation-triangle-fill text-warning" title="{{ active_warns|length }} warnings"></i>
+    {% elif issues %}
+      <i class="bi bi-info-circle-fill text-info"></i>
+    {% else %}
+      <i class="bi bi-check-circle-fill text-success" title="OK"></i>
+    {% endif %}
+  </td>
+{% endif %}
+{% endmacro %}
+
+{% macro _check_label(key) %}
+  {% if key == 'gtin' %}GTIN
+  {% elif key == 'nfp' %}NFP
+  {% elif key == 'eyemark' %}Eyemark
+  {% elif key == 'spelling' %}Spelling
+  {% elif key == 'fda' %}FDA
+  {% else %}{{ key }}{% endif %}
+{% endmacro %}
+
+
+{% block scripts %}
+<style>
+@media print {
+  .no-print { display: none !important; }
+  .print-only { display: block !important; }
+  .card { break-inside: avoid; }
+  body { background: white !important; }
+  .navbar { display: none !important; }
+  .container { max-width: 100% !important; padding: 0 !important; }
+  a { color: inherit !important; text-decoration: none !important; }
+}
+.print-only { display: none; }
+</style>
+{% endblock %}
