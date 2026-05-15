@@ -738,8 +738,27 @@ def _check_fda(ocr_text: str, fname: str) -> dict:
         )
 
     # ── Disease claims ────────────────────────────────────────────────────────
+    # Strip the required FDA disclaimer before scanning — it contains "treat",
+    # "cure", "diagnose", and "prevent any disease" which would otherwise
+    # trigger false positives on every label that correctly includes the disclaimer.
+    _DISCLAIMER_RE = re.compile(
+        r'(?:this\s+)?statement[s]?\s+ha(?:s|ve)\s+not\s+been\s+evaluated'
+        r'.{0,400}?'
+        r'not\s+intended\s+to\s+diagnose.{0,120}disease',
+        re.IGNORECASE | re.DOTALL,
+    )
+    disclaimer_present = bool(_DISCLAIMER_RE.search(tl))
+    tl_no_disclaimer = _DISCLAIMER_RE.sub('', tl)
+
+    if disclaimer_present:
+        notes.append(
+            'FDA required disclaimer detected — "This statement has not been evaluated by the FDA. '
+            'This product is not intended to diagnose, treat, cure, or prevent any disease." '
+            'Disclaimer text is excluded from disease claim scanning.'
+        )
+
     for pattern, description in _DISEASE_CLAIM_PATTERNS:
-        if re.search(pattern, tl):
+        if re.search(pattern, tl_no_disclaimer):
             issues.append({
                 'severity': 'critical',
                 'message': (
@@ -751,13 +770,7 @@ def _check_fda(ocr_text: str, fname: str) -> dict:
     # ── Structure/function claims + disclaimer ────────────────────────────────
     sf_found = [p for p in _SF_CLAIM_PATTERNS if re.search(p, tl)]
     if sf_found and is_supplement:
-        has_disclaimer = any(phrase in tl for phrase in [
-            'not been evaluated by the food and drug',
-            'not been evaluated by the fda',
-            'not intended to diagnose',
-            'these statements have not',
-        ])
-        if not has_disclaimer:
+        if not disclaimer_present:
             issues.append({
                 'severity': 'critical',
                 'message': (
