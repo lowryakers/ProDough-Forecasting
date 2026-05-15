@@ -7,7 +7,12 @@
     <h4 class="mb-0 fw-bold"><i class="bi bi-upc-scan text-primary me-2"></i>Master GTIN List</h4>
     {% if store %}
     <div class="text-muted small">
-      {{ store.row_count }} SKUs &bull; uploaded {{ store.uploaded_at[:10] }} from <em>{{ store.filename }}</em>
+      {{ store.row_count }} SKUs
+      {% if sheet_cfg.get('last_synced') %}
+        &bull; synced {{ sheet_cfg.last_synced[:16].replace('T',' ') }}
+      {% else %}
+        &bull; from <em>{{ store.filename }}</em>
+      {% endif %}
       {% if store.error_count > 0 %}
       &bull; <span class="text-warning fw-semibold">{{ store.error_count }} with issues</span>
       {% else %}
@@ -18,17 +23,67 @@
   </div>
   <div class="ms-auto">
     <a href="{{ url_for('index') }}" class="btn btn-outline-primary btn-sm">
-      <i class="bi bi-arrow-up-circle me-1"></i>Upload New List
+      <i class="bi bi-arrow-up-circle me-1"></i>Run New Proof
     </a>
   </div>
 </div>
 
+{# ── Google Sheets sync card ─────────────────────────────────────────────── #}
+<div class="card shadow-sm mb-4 {% if sheet_cfg.get('sheet_url') %}border-success{% endif %}">
+  <div class="card-header py-2 d-flex align-items-center gap-2
+              {% if sheet_cfg.get('sheet_url') %}bg-success bg-opacity-10{% else %}bg-light{% endif %}">
+    <i class="bi bi-cloud-arrow-down{% if sheet_cfg.get('sheet_url') %}-fill text-success{% endif %} me-1"></i>
+    <span class="fw-semibold small">Google Sheets Sync</span>
+    {% if sheet_cfg.get('sheet_url') %}
+    <span class="badge bg-success ms-1">Connected</span>
+    {% endif %}
+  </div>
+  <div class="card-body py-3">
+    {% if not sheet_cfg.get('sheet_url') %}
+    <p class="text-muted small mb-3">
+      Connect your Google Sheet so the GTIN list is always current — no file uploads needed.
+      <strong>Setup:</strong> open your sheet, go to
+      <strong>File → Share → Publish to web</strong>, choose
+      <strong>Comma-separated values (.csv)</strong>, click <em>Publish</em>, then paste the URL (or just the normal sheet URL) below.
+    </p>
+    {% endif %}
+    <div class="d-flex gap-2 flex-wrap align-items-end">
+      <div class="flex-grow-1">
+        <label class="form-label small mb-1 fw-semibold">Google Sheets URL</label>
+        <input type="url" id="sheetUrl" class="form-control form-control-sm"
+               placeholder="https://docs.google.com/spreadsheets/d/…"
+               value="{{ sheet_cfg.get('sheet_url', '') }}">
+      </div>
+      <button class="btn btn-sm btn-primary" onclick="saveSheetUrl()" id="saveBtn">
+        <i class="bi bi-cloud-check me-1"></i>Save
+      </button>
+      {% if sheet_cfg.get('sheet_url') %}
+      <button class="btn btn-sm btn-outline-success" onclick="syncNow()" id="syncBtn">
+        <i class="bi bi-arrow-clockwise me-1"></i>Sync Now
+      </button>
+      <button class="btn btn-sm btn-outline-danger" onclick="clearSheet()" title="Disconnect sheet">
+        <i class="bi bi-x-circle"></i>
+      </button>
+      {% endif %}
+    </div>
+    <div id="sheetStatus" class="small mt-2">
+      {% if sheet_cfg.get('last_synced') %}
+        <span class="text-success">
+          <i class="bi bi-check-circle-fill me-1"></i>
+          Last synced {{ sheet_cfg.last_synced[:16].replace('T',' ') }} &bull; {{ sheet_cfg.get('row_count', 0) }} rows
+        </span>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+{# ── GTIN table ──────────────────────────────────────────────────────────── #}
 {% if not store %}
 <div class="card shadow-sm">
   <div class="card-body text-center py-5 text-muted">
     <i class="bi bi-upc fs-1 d-block mb-3 opacity-50"></i>
-    <h5>No GTIN list on file</h5>
-    <p class="mb-3">Upload the Master ProDough SKU &amp; GTIN List when running your next proof.</p>
+    <h5>No GTIN data yet</h5>
+    <p class="mb-3">Connect your Google Sheet above, or upload the Master ProDough SKU &amp; GTIN List when running a proof.</p>
     <a href="{{ url_for('index') }}" class="btn btn-primary">
       <i class="bi bi-upload me-2"></i>Go to Upload
     </a>
@@ -42,7 +97,7 @@
   <i class="bi bi-exclamation-triangle-fill fs-5"></i>
   <div>
     <strong>{{ store.error_count }} GTIN(s) have issues</strong> — highlighted below.
-    Fix them in your master spreadsheet and re-upload on the next proof run.
+    Fix them in your master spreadsheet; they will update automatically on the next sync.
   </div>
 </div>
 {% endif %}
@@ -56,7 +111,7 @@
            style="max-width:280px" placeholder="Search GTIN, SKU, or flavor…"
            oninput="filterTable()">
   </div>
-  <div class="table-responsive" style="max-height:72vh;overflow-y:auto">
+  <div class="table-responsive" style="max-height:65vh;overflow-y:auto">
     <table class="table table-sm table-hover align-middle mb-0 small" id="gtinTable">
       <thead class="table-light sticky-top">
         <tr>
@@ -95,7 +150,10 @@
 
 <div class="text-muted small mt-2 ps-1">
   <i class="bi bi-info-circle me-1"></i>
-  GTINs should be 12-digit numeric UPC codes. Upload a fresh copy of the master list with each proof run to keep barcode cross-checks current.
+  GTINs must be 12-digit numeric UPC codes.
+  {% if sheet_cfg.get('sheet_url') %}
+  This data is automatically refreshed from your Google Sheet every 5 minutes during active proofing.
+  {% endif %}
 </div>
 
 {% endif %}
@@ -108,6 +166,66 @@ function filterTable() {
   document.querySelectorAll('#gtinTable tbody tr').forEach(row => {
     row.style.display = row.textContent.toLowerCase().includes(q) ? '' : 'none';
   });
+}
+
+function setStatus(msg, cls='text-muted') {
+  document.getElementById('sheetStatus').innerHTML =
+    `<span class="${cls}">${msg}</span>`;
+}
+
+async function saveSheetUrl() {
+  const url = document.getElementById('sheetUrl').value.trim();
+  const btn = document.getElementById('saveBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Saving…';
+  try {
+    const r = await fetch('/api/gtin-sheet', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({url}),
+    });
+    const d = await r.json();
+    if (!d.ok) { setStatus('<i class="bi bi-x-circle-fill text-danger me-1"></i>' + d.error, 'text-danger'); return; }
+    if (url) {
+      setStatus('<i class="bi bi-arrow-clockwise me-1"></i>Syncing…', 'text-muted');
+      await syncNow();
+    } else {
+      location.reload();
+    }
+  } catch(e) {
+    setStatus('<i class="bi bi-x-circle-fill text-danger me-1"></i>Save failed: ' + e, 'text-danger');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-cloud-check me-1"></i>Save';
+  }
+}
+
+async function syncNow() {
+  const btn = document.getElementById('syncBtn');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Syncing…'; }
+  try {
+    const r = await fetch('/api/gtin-sheet/sync', {method: 'POST'});
+    const d = await r.json();
+    if (d.ok) {
+      location.reload();
+    } else {
+      setStatus('<i class="bi bi-x-circle-fill text-danger me-1"></i>' + d.error, 'text-danger');
+    }
+  } catch(e) {
+    setStatus('<i class="bi bi-x-circle-fill text-danger me-1"></i>Sync failed: ' + e, 'text-danger');
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-arrow-clockwise me-1"></i>Sync Now'; }
+  }
+}
+
+async function clearSheet() {
+  if (!confirm('Disconnect the Google Sheet? The GTIN list will no longer auto-sync.')) return;
+  await fetch('/api/gtin-sheet', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({url: ''}),
+  });
+  location.reload();
 }
 </script>
 {% endblock %}
