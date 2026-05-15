@@ -17,8 +17,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy app files
 COPY . .
 
-# Verify templates are present (fails build if missing)
-RUN test -f templates/gtin.html || (echo "ERROR: templates/gtin.html missing from build context" && exit 1)
+# Verify templates are present and show their content to confirm correct version
+RUN test -f templates/gtin.html || (echo "ERROR: templates/gtin.html missing" && exit 1)
+RUN ls -la templates/ && grep -c "Google Sheets Sync" templates/gtin.html && echo "OK: gtin.html contains Google Sheets Sync card"
 
 # Ensure uploads directory exists
 RUN mkdir -p uploads
