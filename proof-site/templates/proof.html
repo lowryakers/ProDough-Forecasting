@@ -34,16 +34,17 @@
             <div id="fileList" class="mt-2"></div>
           </div>
 
-          <!-- GTIN list (required) -->
+          <!-- GTIN list (optional when sheet is synced) -->
           <div class="mb-4">
             <label class="form-label fw-semibold mb-1">
-              Master ProDough SKU &amp; GTIN List <span class="text-danger">*</span>
+              Master ProDough SKU &amp; GTIN List
+              <span class="badge bg-secondary ms-1 fw-normal" style="font-size:.7rem">Optional if Google Sheet synced</span>
             </label>
-            <input type="file" name="gtin_list" accept=".xlsx,.csv" class="form-control" required id="gtinInput">
+            <input type="file" name="gtin_list" accept=".xlsx,.csv" class="form-control" id="gtinInput">
             <div class="form-text">
-              Upload the current <em>MASTER ProDough SKU &amp; GTIN List.xlsx</em> (or .csv).
-              Always upload the latest version — this is what barcode numbers are cross-checked against.
-              All other checks (NFP, eyemark, spelling, FDA) run directly on the artwork PDFs.
+              Upload the <em>MASTER ProDough SKU &amp; GTIN List.xlsx</em> (or .csv) to override the synced sheet,
+              or leave blank if you've connected a Google Sheet on the
+              <a href="/gtin">GTIN List page</a>.
             </div>
           </div>
 
@@ -249,11 +250,6 @@ document.getElementById('proofForm').addEventListener('submit', e => {
   if (!hasArtwork) {
     e.preventDefault();
     alert('Please select at least one artwork file.');
-    return;
-  }
-  if (!hasGtin) {
-    e.preventDefault();
-    alert('Please upload the Master ProDough SKU & GTIN List — it is required for every proof run.');
     return;
   }
 
