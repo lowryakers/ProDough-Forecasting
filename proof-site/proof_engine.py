@@ -6,6 +6,9 @@ Processes packaging PDFs through 5 checks:
   3. Eyemark contrast
   4. Spelling / brand-name errors
   5. FDA compliance flags
+
+Multi-brand support: pass brand_config={'brand_mode': 'generic', ...} to
+run a lighter check set suitable for any brand's packaging artwork.
 """
 import os
 import re
@@ -37,7 +40,7 @@ _jobs: dict = {}
 _jobs_lock = threading.Lock()
 
 
-def create_job(filenames: list) -> str:
+def create_job(filenames: list, brand_config: dict = None) -> str:
     job_id = str(uuid.uuid4())[:8]
     with _jobs_lock:
         _jobs[job_id] = {
@@ -51,6 +54,7 @@ def create_job(filenames: list) -> str:
             'summary': {},
             'error': None,
             'dismissals': {},
+            'brand_config': brand_config or {},
         }
     return job_id
 
@@ -85,10 +89,11 @@ def _update_job(job_id: str, **kwargs):
             _jobs[job_id].update(kwargs)
 
 
-def start_job(job_id: str, pdf_paths: list, gtin_rows: list, work_dir: str):
+def start_job(job_id: str, pdf_paths: list, gtin_rows: list, work_dir: str,
+              brand_config: dict = None):
     t = threading.Thread(
         target=_process_job,
-        args=(job_id, pdf_paths, gtin_rows, work_dir),
+        args=(job_id, pdf_paths, gtin_rows, work_dir, brand_config),
         daemon=True,
     )
     t.start()
@@ -133,7 +138,8 @@ load_jobs_from_disk()
 
 # ── Main processing loop ──────────────────────────────────────────────────────
 
-def _process_job(job_id: str, pdf_paths: list, gtin_rows: list, work_dir: str):
+def _process_job(job_id: str, pdf_paths: list, gtin_rows: list, work_dir: str,
+                 brand_config: dict = None):
     _update_job(job_id, status='running')
     results = []
     total = len(pdf_paths)
@@ -143,7 +149,7 @@ def _process_job(job_id: str, pdf_paths: list, gtin_rows: list, work_dir: str):
             fname = os.path.basename(pdf_path)
             _update_job(job_id, current_file=fname, progress=int(i / total * 90))
             try:
-                result = _proof_single(pdf_path, gtin_rows, work_dir)
+                result = _proof_single(pdf_path, gtin_rows, work_dir, brand_config=brand_config)
             except Exception as exc:
                 result = {
                     'filename': fname,
@@ -206,7 +212,9 @@ def _is_film_rollstock(fname: str, ocr_text: str = '') -> bool:
 
 # ── Single-file proofing ──────────────────────────────────────────────────────
 
-def _proof_single(pdf_path: str, gtin_rows: list, work_dir: str) -> dict:
+def _proof_single(pdf_path: str, gtin_rows: list, work_dir: str,
+                  brand_config: dict = None) -> dict:
+    brand_config = brand_config or {}
     fname = os.path.basename(pdf_path)
     stem = Path(pdf_path).stem
 
@@ -245,18 +253,32 @@ def _proof_single(pdf_path: str, gtin_rows: list, work_dir: str) -> dict:
         except Exception:
             pass
 
-    is_film = _is_film_rollstock(fname, ocr_text)
-
     # Scan barcode stripes directly from rendered image (primary GTIN source)
     barcode_gtins = _scan_barcodes(img_path)
 
-    checks = {
-        'gtin':     _check_gtin(ocr_text, fname, gtin_rows, barcode_gtins),
-        'nfp':      _check_nfp(ocr_text),
-        'eyemark':  _check_eyemark(img, is_film, fname),
-        'spelling': _check_spelling(ocr_text, fname),
-        'fda':      _check_fda(ocr_text, fname),
-    }
+    brand_mode = brand_config.get('brand_mode', 'prodough')
+
+    if brand_mode == 'generic':
+        # Generic brand mode: GTIN, eyemark (packaging_type-driven), spelling, fda_light
+        # No NFP check
+        is_film = brand_config.get('packaging_type', 'other') == 'stick'
+        brand_name = brand_config.get('brand_name', '')
+        checks = {
+            'gtin':     _check_gtin(ocr_text, fname, gtin_rows, barcode_gtins),
+            'eyemark':  _check_eyemark(img, is_film, fname),
+            'spelling': _check_spelling_generic(ocr_text, brand_name),
+            'fda':      _check_fda_light(ocr_text, fname),
+        }
+    else:
+        # ProDough mode: run all 5 checks as standard
+        is_film = _is_film_rollstock(fname, ocr_text)
+        checks = {
+            'gtin':     _check_gtin(ocr_text, fname, gtin_rows, barcode_gtins),
+            'nfp':      _check_nfp(ocr_text),
+            'eyemark':  _check_eyemark(img, is_film, fname),
+            'spelling': _check_spelling(ocr_text, fname),
+            'fda':      _check_fda(ocr_text, fname),
+        }
 
     all_issues = [i for c in checks.values() for i in c.get('issues', [])]
     crit  = [i for i in all_issues if i['severity'] == 'critical']
@@ -574,6 +596,61 @@ def _check_spelling(ocr_text: str, fname: str) -> dict:
     return {'issues': issues, 'notes': notes}
 
 
+# ── Generic brand spelling check ─────────────────────────────────────────────
+
+# Generic food misspellings — same as _MISSPELLINGS but without ProDough-specific patterns
+_GENERIC_MISSPELLINGS = {
+    r'\bcheescake\b':  'cheesecake',
+    r'\bbanna\b':      'banana',
+    r'\bchoclate\b':   'chocolate',
+    r'\bvanila\b':     'vanilla',
+    r'\bcarmel\b':     'caramel',
+    r'\bcinamon\b':    'cinnamon',
+    r'\bstrwberry\b':  'strawberry',
+    r'\brasberry\b':   'raspberry',
+    r'\braspbery\b':   'raspberry',
+    r'\bprotien\b':    'protein',
+    r'\bingrediant':   'ingredient',
+    r'\bartifical\b':  'artificial',
+    r'\bnatrual\b':    'natural',
+    r'\bexellent\b':   'excellent',
+    r'\bnutrional\b':  'nutritional',
+}
+
+
+def _check_spelling_generic(ocr_text: str, brand_name: str) -> dict:
+    issues, notes = [], []
+
+    for pattern, correction in _GENERIC_MISSPELLINGS.items():
+        if re.search(pattern, ocr_text, re.IGNORECASE):
+            issues.append({
+                'severity': 'warning',
+                'message': (
+                    f'Possible misspelling detected → should be "{correction}". '
+                    'OCR on outlined-text PDFs can produce false positives; verify on the actual artwork file.'
+                ),
+            })
+
+    if re.search(r'\bflavour\b', ocr_text, re.IGNORECASE):
+        notes.append('UK spelling "flavour" detected. US market labels should use "flavor".')
+
+    if brand_name:
+        notes.append(
+            f"verify brand name '{brand_name}' is spelled correctly throughout"
+        )
+
+    return {'issues': issues, 'notes': notes}
+
+
+# ── Module-level FDA regex (shared between _check_fda and _check_fda_light) ───
+
+_DISCLAIMER_RE = re.compile(
+    r'(?:this\s+)?statement[s]?\s+ha(?:s|ve)\s+not\s+been\s+evaluated'
+    r'.{0,400}?'
+    r'not\s+intended\s+to\s+diagnose.{0,120}disease',
+    re.IGNORECASE | re.DOTALL,
+)
+
 # ── Check 5: FDA compliance ───────────────────────────────────────────────────
 
 _DISEASE_CLAIM_PATTERNS = [
@@ -741,12 +818,6 @@ def _check_fda(ocr_text: str, fname: str) -> dict:
     # Strip the required FDA disclaimer before scanning — it contains "treat",
     # "cure", "diagnose", and "prevent any disease" which would otherwise
     # trigger false positives on every label that correctly includes the disclaimer.
-    _DISCLAIMER_RE = re.compile(
-        r'(?:this\s+)?statement[s]?\s+ha(?:s|ve)\s+not\s+been\s+evaluated'
-        r'.{0,400}?'
-        r'not\s+intended\s+to\s+diagnose.{0,120}disease',
-        re.IGNORECASE | re.DOTALL,
-    )
     disclaimer_present = bool(_DISCLAIMER_RE.search(tl))
     tl_no_disclaimer = _DISCLAIMER_RE.sub('', tl)
 
@@ -885,6 +956,112 @@ def _check_fda(ocr_text: str, fname: str) -> dict:
             'Caffeine or stimulant ingredient detected. '
             'Ensure caffeine amount is listed and total is within safe limits.'
         )
+
+    return {'issues': issues, 'notes': notes}
+
+
+# ── Check 5 (lightweight): FDA compliance for generic brands ─────────────────
+
+def _check_fda_light(ocr_text: str, fname: str) -> dict:
+    """Lightweight FDA check for generic brands.
+
+    Runs: sparse note, disease claim scan, S/F claim + disclaimer check,
+    net weight check, gluten-free conflict check.
+    Skips all absence-based checks (NFP, ingredients, allergens, mfr address,
+    % DV footnote, organic, natural, etc.) to avoid noise for non-ProDough artwork.
+    """
+    issues, notes = [], []
+    tl = ocr_text.lower()
+
+    is_supplement = 'supplement facts' in tl
+    sparse = _ocr_is_sparse(ocr_text)
+
+    if sparse:
+        notes.append(
+            'Low OCR yield — this PDF likely uses text converted to outlines (standard for print-ready files). '
+            'Absence-based checks cannot be reliably automated on outlined-text PDFs. '
+            'Verify required label elements directly on the rendered artwork image.'
+        )
+
+    # ── Disease claims ────────────────────────────────────────────────────────
+    disclaimer_present = bool(_DISCLAIMER_RE.search(tl))
+    tl_no_disclaimer = _DISCLAIMER_RE.sub('', tl)
+
+    if disclaimer_present:
+        notes.append(
+            'FDA required disclaimer detected — "This statement has not been evaluated by the FDA. '
+            'This product is not intended to diagnose, treat, cure, or prevent any disease." '
+            'Disclaimer text is excluded from disease claim scanning.'
+        )
+
+    for pattern, description in _DISEASE_CLAIM_PATTERNS:
+        if re.search(pattern, tl_no_disclaimer):
+            issues.append({
+                'severity': 'critical',
+                'message': (
+                    f'Potential unauthorized disease claim detected: {description}. '
+                    'Unapproved disease claims are prohibited (21 CFR 101.14 / FD&C Act 403(r)).'
+                ),
+            })
+
+    # ── Structure/function claims + disclaimer ────────────────────────────────
+    sf_found = [p for p in _SF_CLAIM_PATTERNS if re.search(p, tl)]
+    if sf_found and is_supplement:
+        if not disclaimer_present:
+            issues.append({
+                'severity': 'critical',
+                'message': (
+                    'Structure/function claims detected on a Supplement Facts product '
+                    'but the required FDA disclaimer is missing. '
+                    'Per 21 CFR 101.93, labels must include: '
+                    '"These statements have not been evaluated by the Food and Drug Administration. '
+                    'This product is not intended to diagnose, treat, cure, or prevent any disease."'
+                ),
+            })
+    elif sf_found and not is_supplement:
+        notes.append(
+            'Structure/function-style claims ("supports...", "promotes...", etc.) on a conventional food label. '
+            'Generally permissible but must not imply treatment or prevention of disease.'
+        )
+
+    # ── Net weight ────────────────────────────────────────────────────────────
+    if not sparse and not re.search(r'net\s*wt|net\s*weight', tl):
+        issues.append({
+            'severity': 'warning',
+            'message': (
+                'No "Net Wt" declaration detected. '
+                'Net quantity of contents is required (15 USC 1453 / 21 CFR 101.105). Verify manually.'
+            ),
+        })
+    elif re.search(r'net\s*wt|net\s*weight', tl):
+        has_g  = bool(re.search(r'net\s*wt.{0,20}\d+\s*g\b', tl))
+        has_oz = bool(re.search(r'\d+\.?\d*\s*oz\b', tl))
+        if has_g and not has_oz:
+            notes.append(
+                'Net weight appears in grams only. '
+                'US regulations generally require both metric (g) and US customary (oz) units. '
+                'Verify with your legal/regulatory team.'
+            )
+
+    # ── Gluten-Free conflict check ────────────────────────────────────────────
+    if re.search(r'gluten[\s\-]?free', tl):
+        if any(w in tl for w in ['wheat', 'barley', 'rye', 'triticale']):
+            issues.append({
+                'severity': 'critical',
+                'message': (
+                    '"Gluten-Free" claim detected alongside wheat/barley/rye in OCR text. '
+                    'If the product contains these ingredients, the GF claim is prohibited (21 CFR 101.91).'
+                ),
+            })
+        else:
+            notes.append(
+                '"Gluten-Free" claim detected. Under 21 CFR 101.91, product must contain < 20 ppm gluten. '
+                'Ensure third-party testing records are on file.'
+            )
+
+    notes.append(
+        'FDA audit is in lightweight mode. Full regulatory review recommended before going to print.'
+    )
 
     return {'issues': issues, 'notes': notes}
 

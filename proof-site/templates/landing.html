@@ -1,0 +1,161 @@
+{% extends 'base.html' %}
+{% block title %}Artwork Proof Tool{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center mb-4">
+  <div class="col-12">
+    <h2 class="fw-bold mb-1">Artwork Proof Tool</h2>
+    <p class="text-muted mb-0">Choose a proofing workflow to get started.</p>
+  </div>
+</div>
+
+<!-- Two main cards -->
+<div class="row g-4 mb-4">
+
+  <!-- Card 1: ProDough Proof -->
+  <div class="col-md-6">
+    <div class="card shadow-sm h-100 border-primary" style="border-width:2px!important">
+      <div class="card-body p-4 d-flex flex-column">
+        <div class="mb-3">
+          <span style="font-size:2.5rem">🍩</span>
+        </div>
+        <h4 class="fw-bold mb-1">ProDough Proof</h4>
+        <p class="text-muted mb-3">Full 5-check proofing pass for ProDough packaging</p>
+
+        <ul class="list-unstyled mb-4">
+          <li class="mb-2">
+            <span class="badge bg-danger me-2">1</span>
+            <strong>GTIN / Barcode</strong>
+            <span class="text-muted small">(with Google Sheets sync)</span>
+          </li>
+          <li class="mb-2">
+            <span class="badge bg-warning text-dark me-2">2</span>
+            <strong>Front Call-Out vs NFP</strong>
+          </li>
+          <li class="mb-2">
+            <span class="badge bg-info text-dark me-2">3</span>
+            <strong>Eyemark Contrast</strong>
+            <span class="text-muted small">(auto-detected)</span>
+          </li>
+          <li class="mb-2">
+            <span class="badge bg-success me-2">4</span>
+            <strong>Spelling &amp; Brand Name</strong>
+            <span class="text-muted small">(ProDough rules)</span>
+          </li>
+          <li class="mb-2">
+            <span class="badge bg-danger me-2">5</span>
+            <strong>FDA Audit Risk</strong>
+            <span class="text-muted small">(full)</span>
+          </li>
+        </ul>
+
+        <div class="mt-auto">
+          <a href="{{ url_for('prodough_proof') }}" class="btn btn-primary btn-lg w-100">
+            Run ProDough Proof <i class="bi bi-arrow-right ms-1"></i>
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Card 2: Brand Proof -->
+  <div class="col-md-6">
+    <div class="card shadow-sm h-100 border-secondary" style="border-width:2px!important">
+      <div class="card-body p-4 d-flex flex-column">
+        <div class="mb-3">
+          <i class="bi bi-file-earmark-check" style="font-size:2.5rem;color:#6c757d"></i>
+        </div>
+        <h4 class="fw-bold mb-1">Brand Proof</h4>
+        <p class="text-muted mb-3">Configurable proofing for any brand's packaging artwork</p>
+
+        <ul class="list-unstyled mb-4">
+          <li class="mb-2">
+            <span class="badge bg-danger me-2">1</span>
+            <strong>GTIN / Barcode</strong>
+          </li>
+          <li class="mb-2">
+            <span class="badge bg-info text-dark me-2">2</span>
+            <strong>Eyemark Contrast</strong>
+            <span class="text-muted small">(stick/sachet only)</span>
+          </li>
+          <li class="mb-2">
+            <span class="badge bg-success me-2">3</span>
+            <strong>Spelling &amp; Brand Name</strong>
+            <span class="text-muted small">(your brand)</span>
+          </li>
+          <li class="mb-2">
+            <span class="badge bg-warning text-dark me-2">4</span>
+            <strong>FDA Risk</strong>
+            <span class="text-muted small">(lightweight)</span>
+          </li>
+          <li class="mb-2 text-muted">
+            <span class="badge bg-secondary me-2" style="opacity:.5">—</span>
+            <span>Front vs NFP: <em>not included</em></span>
+          </li>
+        </ul>
+
+        <div class="mt-auto">
+          <a href="{{ url_for('brand_page') }}" class="btn btn-secondary btn-lg w-100">
+            Start Brand Proof <i class="bi bi-arrow-right ms-1"></i>
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Recent Jobs -->
+<div class="row">
+  <div class="col-12">
+    <h5 class="fw-semibold mb-2"><i class="bi bi-clock-history me-1"></i>Recent Jobs</h5>
+    {% set recent = jobs[:5] %}
+    {% if recent %}
+    <div class="list-group shadow-sm">
+      {% for job in recent %}
+      <a href="{{ url_for('result', job_id=job.id) }}"
+         class="list-group-item list-group-item-action px-3 py-2">
+        <div class="d-flex justify-content-between align-items-center gap-2">
+          <div style="min-width:0">
+            <div class="small fw-semibold text-truncate">
+              {% set brand = job.brand_config.get('brand_name', '') if job.brand_config else '' %}
+              {% if brand %}
+                <span class="badge bg-secondary me-1" style="font-size:.65rem">{{ brand }}</span>
+              {% endif %}
+              {{ (job.filenames or ['Job ' ~ job.id]) | join(', ') }}
+            </div>
+            <div class="text-muted" style="font-size:.73rem">
+              {{ job.created[:19].replace('T', ' ') }}
+            </div>
+          </div>
+          <div class="flex-shrink-0">
+            {% if job.status == 'done' %}
+              {% if job.summary.total_critical_issues > 0 %}
+                <span class="badge bg-danger">{{ job.summary.total_critical_issues }} critical</span>
+              {% elif job.summary.total_warning_issues > 0 %}
+                <span class="badge bg-warning text-dark">{{ job.summary.total_warning_issues }} warnings</span>
+              {% else %}
+                <span class="badge bg-success">Clean</span>
+              {% endif %}
+            {% elif job.status == 'running' %}
+              <span class="badge bg-primary">Running…</span>
+            {% elif job.status == 'error' %}
+              <span class="badge bg-danger">Error</span>
+            {% else %}
+              <span class="badge bg-secondary">Pending</span>
+            {% endif %}
+          </div>
+        </div>
+      </a>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="card shadow-sm">
+      <div class="card-body text-muted text-center small py-4">
+        No jobs yet — run a proof to get started.
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

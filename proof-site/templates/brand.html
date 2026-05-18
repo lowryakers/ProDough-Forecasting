@@ -1,0 +1,284 @@
+{% extends 'base.html' %}
+{% block title %}Brand Artwork Proof{% endblock %}
+
+{% block content %}
+<div class="row g-4">
+
+  <!-- Upload panel -->
+  <div class="col-lg-7">
+    <div class="card shadow-sm">
+      <div class="card-header bg-secondary text-white d-flex align-items-center gap-2 py-3">
+        <i class="bi bi-file-earmark-check fs-5"></i>
+        <div>
+          <div class="fw-semibold">Brand Artwork Proof Upload</div>
+          <div class="small opacity-75">Configurable proofing for any brand's packaging artwork</div>
+        </div>
+      </div>
+      <div class="card-body p-4">
+
+        <form id="brandForm" action="{{ url_for('brand_upload') }}" method="POST" enctype="multipart/form-data">
+
+          <!-- Brand Name -->
+          <div class="mb-3">
+            <label class="form-label fw-semibold mb-1" for="brandNameInput">
+              Brand Name <span class="text-danger">*</span>
+            </label>
+            <input type="text" id="brandNameInput" name="brand_name" class="form-control"
+                   placeholder="e.g. Acme Nutrition" required>
+          </div>
+
+          <!-- Packaging Type -->
+          <div class="mb-3">
+            <label class="form-label fw-semibold mb-1" for="packagingTypeInput">
+              Packaging Type <span class="text-danger">*</span>
+            </label>
+            <select id="packagingTypeInput" name="packaging_type" class="form-select" required>
+              <option value="stick">Stick Pack / Sachet (eyemark check ON)</option>
+              <option value="pouch">Pouch / Bag (eyemark check OFF)</option>
+              <option value="other" selected>Other / Rigid (eyemark check OFF)</option>
+            </select>
+            <div class="form-text">
+              Stick Pack / Sachet enables the eyemark contrast check; other formats skip it.
+            </div>
+          </div>
+
+          <!-- GTIN List (required) -->
+          <div class="mb-4">
+            <label class="form-label fw-semibold mb-1" for="gtinInput">
+              Master GTIN List <span class="text-danger">*</span>
+            </label>
+            <input type="file" name="gtin_list" accept=".xlsx,.csv" class="form-control"
+                   id="gtinInput" required>
+            <div class="form-text">
+              Upload your brand's SKU &amp; GTIN spreadsheet (required).
+              Columns should include <code>gtin</code> (12-digit UPC) and <code>flavor</code> / <code>product name</code>.
+            </div>
+          </div>
+
+          <!-- Drop zone -->
+          <div class="mb-4">
+            <label class="form-label fw-semibold mb-2">
+              Artwork Files <span class="text-danger">*</span>
+            </label>
+            <div id="dropZone" class="drop-zone rounded-3 p-4 text-center"
+                 onclick="document.getElementById('artworkInput').click()">
+              <i class="bi bi-cloud-arrow-up fs-1 text-secondary opacity-75"></i>
+              <div class="fw-semibold mt-2 mb-1">Drag &amp; drop files here, or click to browse</div>
+              <div class="text-muted small">PDF, AI, PNG, JPG, TIFF, EPS — multiple files OK</div>
+            </div>
+            <input type="file" id="artworkInput" name="artwork" multiple
+                   accept=".pdf,.ai,.png,.jpg,.jpeg,.tiff,.tif,.eps" class="d-none">
+            <div id="fileList" class="mt-2"></div>
+          </div>
+
+          <button type="submit" class="btn btn-secondary px-5 py-2" id="submitBtn">
+            <i class="bi bi-play-circle me-2"></i>Run Brand Proof
+          </button>
+          <button type="button" class="btn btn-outline-secondary ms-2" onclick="clearFiles()">
+            Clear
+          </button>
+
+        </form>
+      </div>
+    </div>
+
+    <!-- What gets checked -->
+    <div class="card shadow-sm mt-3">
+      <div class="card-header fw-semibold small bg-light py-2">What this tool checks</div>
+      <div class="card-body p-0">
+        <table class="table table-sm table-hover mb-0 small align-middle">
+          <tbody>
+            <tr>
+              <td class="ps-3 text-center" style="width:36px">
+                <span class="badge bg-danger rounded-pill">1</span>
+              </td>
+              <td class="fw-semibold py-2">GTIN / Barcode</td>
+              <td class="text-muted pe-3">
+                Reads 12-digit UPCs from each PDF and cross-checks against the GTIN list you upload
+              </td>
+            </tr>
+            <tr>
+              <td class="ps-3 text-center"><span class="badge bg-info text-dark rounded-pill">2</span></td>
+              <td class="fw-semibold py-2">Eyemark Contrast</td>
+              <td class="text-muted pe-3">
+                Enabled only for <strong>Stick Pack / Sachet</strong> — analyzes bottom-right corner brightness
+              </td>
+            </tr>
+            <tr>
+              <td class="ps-3 text-center"><span class="badge bg-success rounded-pill">3</span></td>
+              <td class="fw-semibold py-2">Spelling / Brand Name</td>
+              <td class="text-muted pe-3">
+                Common food-label misspellings plus a reminder to verify your brand name is spelled consistently
+              </td>
+            </tr>
+            <tr class="table-warning">
+              <td class="ps-3 text-center"><span class="badge bg-warning text-dark rounded-pill">4</span></td>
+              <td class="fw-semibold py-2">FDA Risk (lightweight)</td>
+              <td class="text-muted pe-3">
+                Disease claims · structure/function + disclaimer · net weight format · Gluten-Free conflict ·
+                Full regulatory review recommended before print
+              </td>
+            </tr>
+            <tr class="table-light text-muted">
+              <td class="ps-3 text-center"><span class="badge bg-secondary rounded-pill opacity-50">—</span></td>
+              <td class="py-2">Front vs NFP</td>
+              <td class="pe-3"><em>Not included in Brand Proof</em></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Sidebar -->
+  <div class="col-lg-5">
+
+    <!-- Recent jobs -->
+    <div class="card shadow-sm">
+      <div class="card-header fw-semibold bg-light d-flex justify-content-between align-items-center py-2">
+        <span><i class="bi bi-clock-history me-1"></i>Recent Proof Jobs</span>
+        <small class="text-muted">This session</small>
+      </div>
+      {% if jobs %}
+      <div class="list-group list-group-flush">
+        {% for job in jobs %}
+        <a href="{{ url_for('result', job_id=job.id) }}"
+           class="list-group-item list-group-item-action px-3 py-2">
+          <div class="d-flex justify-content-between align-items-center gap-2">
+            <div style="min-width:0">
+              <div class="small fw-semibold text-truncate">
+                {{ (job.filenames or ['Job ' ~ job.id]) | join(', ') }}
+              </div>
+              <div class="text-muted" style="font-size:.73rem">
+                {{ job.created[:19].replace('T', ' ') }}
+              </div>
+            </div>
+            <div class="flex-shrink-0">
+              {% if job.status == 'done' %}
+                {% if job.summary.total_critical_issues > 0 %}
+                  <span class="badge bg-danger">{{ job.summary.total_critical_issues }} critical</span>
+                {% elif job.summary.total_warning_issues > 0 %}
+                  <span class="badge bg-warning text-dark">{{ job.summary.total_warning_issues }} warnings</span>
+                {% else %}
+                  <span class="badge bg-success">Clean</span>
+                {% endif %}
+              {% elif job.status == 'running' %}
+                <span class="badge bg-primary">Running…</span>
+              {% elif job.status == 'error' %}
+                <span class="badge bg-danger">Error</span>
+              {% else %}
+                <span class="badge bg-secondary">Pending</span>
+              {% endif %}
+            </div>
+          </div>
+        </a>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="card-body text-muted text-center small py-4">
+        No jobs yet — upload some artwork to get started.
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- Tips -->
+    <div class="card shadow-sm mt-3 border-warning">
+      <div class="card-header small fw-semibold bg-warning bg-opacity-10 border-warning py-2">
+        <i class="bi bi-lightbulb me-1 text-warning"></i>Tips for best results
+      </div>
+      <div class="card-body small text-muted">
+        <ul class="mb-0 ps-3">
+          <li class="mb-1">
+            <strong>Packaging type controls eyemark:</strong> select
+            <em>Stick Pack / Sachet</em> to enable the eyemark contrast check.
+            Pouches and rigid packaging skip it automatically.
+          </li>
+          <li class="mb-1">
+            <strong>Text-as-outlines PDFs</strong> (standard for print) will have limited OCR accuracy.
+            Results are best-effort with "verify manually" guidance where OCR is uncertain.
+          </li>
+          <li class="mb-1">
+            <strong>One PDF per SKU</strong> gives the clearest per-SKU report.
+          </li>
+          <li class="mb-1">
+            <strong>GTIN list is required</strong> for Brand Proof — it must include <code>gtin</code>
+            and <code>flavor</code> / <code>product name</code> columns.
+          </li>
+          <li>
+            <strong>FDA flags are a starting point</strong>, not legal advice.
+            Always have a regulatory professional sign off on final labels.
+          </li>
+        </ul>
+      </div>
+    </div>
+
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const dropZone      = document.getElementById('dropZone');
+const artworkInput  = document.getElementById('artworkInput');
+const fileListEl    = document.getElementById('fileList');
+let selectedFiles   = [];
+
+function renderChips() {
+  fileListEl.innerHTML = '';
+  if (!selectedFiles.length) return;
+  const wrap = document.createElement('div');
+  wrap.className = 'mt-2';
+  selectedFiles.forEach((f, i) => {
+    const chip = document.createElement('span');
+    chip.className = 'file-chip';
+    chip.innerHTML = `<i class="bi bi-file-earmark-pdf text-danger"></i>${f.name}<span class="rm" data-i="${i}">&times;</span>`;
+    wrap.appendChild(chip);
+  });
+  fileListEl.appendChild(wrap);
+  wrap.querySelectorAll('.rm').forEach(btn =>
+    btn.addEventListener('click', () => {
+      selectedFiles.splice(+btn.dataset.i, 1);
+      renderChips(); syncInput();
+    })
+  );
+}
+
+function syncInput() {
+  const dt = new DataTransfer();
+  selectedFiles.forEach(f => dt.items.add(f));
+  artworkInput.files = dt.files;
+}
+
+function addFiles(files) {
+  const seen = new Set(selectedFiles.map(f => f.name + f.size));
+  for (const f of files) {
+    if (!seen.has(f.name + f.size)) { selectedFiles.push(f); seen.add(f.name + f.size); }
+  }
+  renderChips(); syncInput();
+}
+
+function clearFiles() {
+  selectedFiles = []; renderChips(); syncInput();
+  document.getElementById('brandForm').reset();
+}
+
+artworkInput.addEventListener('change', () => addFiles(Array.from(artworkInput.files)));
+dropZone.addEventListener('dragover',  e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault(); dropZone.classList.remove('drag-over');
+  addFiles(Array.from(e.dataTransfer.files));
+});
+document.getElementById('brandForm').addEventListener('submit', e => {
+  const hasArtwork = selectedFiles.length > 0;
+  if (!hasArtwork) {
+    e.preventDefault();
+    alert('Please select at least one artwork file.');
+    return;
+  }
+  const btn = document.getElementById('submitBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Uploading…';
+});
+</script>
+{% endblock %}

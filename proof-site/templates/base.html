@@ -37,13 +37,21 @@
 
 <nav class="navbar navbar-expand-lg navbar-dark bg-primary py-2 shadow-sm">
   <div class="container">
-    <a class="navbar-brand fw-bold d-flex align-items-center gap-2" href="/">
-      <span class="icon">🍩</span> ProDough Artwork Proof
+    <a class="navbar-brand fw-bold d-flex align-items-center gap-2" href="{{ url_for('landing') }}">
+      <span class="icon">🍩</span> Artwork Proof
     </a>
     <div class="d-flex gap-2 ms-auto">
-      <a href="{{ url_for('index') }}"
-         class="btn btn-sm btn-outline-light {% if request.endpoint == 'index' %}active{% endif %}">
-        <i class="bi bi-upload me-1"></i>Upload
+      <a href="{{ url_for('landing') }}"
+         class="btn btn-sm btn-outline-light {% if request.endpoint == 'landing' %}active{% endif %}">
+        <i class="bi bi-house me-1"></i>Home
+      </a>
+      <a href="{{ url_for('prodough_proof') }}"
+         class="btn btn-sm btn-outline-light {% if request.endpoint == 'prodough_proof' %}active{% endif %}">
+        <i class="bi bi-file-earmark-check me-1"></i>ProDough Proof
+      </a>
+      <a href="{{ url_for('brand_page') }}"
+         class="btn btn-sm btn-outline-light {% if request.endpoint == 'brand_page' %}active{% endif %}">
+        <i class="bi bi-grid me-1"></i>Brand Proof
       </a>
       <a href="{{ url_for('gtin_page') }}"
          class="btn btn-sm btn-outline-light {% if request.endpoint == 'gtin_page' %}active{% endif %}">
